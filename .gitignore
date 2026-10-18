@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.DS_Store
+
+# Source rasters and generated pyramids live in ../tile-service.
+# These rules keep a copy placed back here from being committed.
+/data/
+/public/data/moon/wac/
+/public/data/moon/wac-preview/
+
+/public/data/moon/elevation/
+
+/.toolchains/
+
+/public/data/moon/apollo/
+
+/public/data/moon/elevation-tiles/
+/public/data/earth/
+/public/data/mars/
+
+# Local GPU benchmark fixture generated from downloaded elevation.
+/public/benchmarks/

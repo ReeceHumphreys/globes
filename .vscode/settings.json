@@ -1,0 +1,6 @@
+{
+  "glsllint.glslangValidatorPath": "/opt/homebrew/bin/glslangValidator",
+  "files.associations": {
+    "*.glsl": "glsl"
+  }
+}

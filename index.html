@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Globes</title>
+    <style>
+      body {
+        margin: 0;
+        background: #101218;
+        color: #e8ebf2;
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+      }
+      .globe-container {
+        position: fixed;
+        inset: 0;
+      }
+      canvas {
+        display: block;
+      }
+      .panel {
+        position: fixed;
+        z-index: 2;
+        top: 16px;
+        left: 16px;
+        width: 240px;
+        max-height: calc(100vh - 32px);
+        overflow: auto;
+        padding: 16px;
+        background: #191e2bee;
+        border: 1px solid #414a60;
+        border-radius: 8px;
+      }
+      .places {
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .places span {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        transform: translate(-50%, calc(-100% + 3px));
+        color: #f4f7fb;
+        font-size: 12px;
+        line-height: 1.2;
+        white-space: nowrap;
+        text-shadow:
+          0 1px 2px #000,
+          0 0 2px #000;
+      }
+      .places span[hidden] {
+        display: none;
+      }
+      .places span[data-landmark] {
+        color: #ffd586;
+      }
+      .places span[data-kind="landing"] {
+        color: #a4e8ff;
+      }
+      .places span[data-kind="landing"]::after {
+        background: #a4e8ff;
+      }
+      .places span[data-kind="impact"] {
+        color: #ffb49d;
+      }
+      .places span[data-kind="impact"]::after {
+        background: #ffb49d;
+        border-radius: 0;
+      }
+      .places span[data-landmark]::after {
+        background: #ffd586;
+        width: 9px;
+        height: 9px;
+      }
+      .places span::after {
+        content: "";
+        width: 6px;
+        height: 6px;
+        margin-top: 2px;
+        border-radius: 50%;
+        background: #fff;
+        box-shadow: 0 0 0 1px #101218;
+      }
+      .panel a {
+        color: #a9caff;
+      }
+      .panel button.system-button {
+        border: 1px solid #61728d;
+        border-radius: 6px;
+        background: #293c54;
+        color: #eff7ff;
+        padding: 5px 8px;
+        cursor: pointer;
+        font: inherit;
+        margin: 0 6px 8px 0;
+      }
+      .marker-countries {
+        border: 0;
+        padding: 0;
+        margin: 14px 0;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .marker-countries legend {
+        padding: 0;
+        margin-bottom: 6px;
+      }
+      .marker-countries button {
+        border: 1px solid #61728d;
+        border-radius: 6px;
+        background: #293c54;
+        color: #eff7ff;
+        padding: 5px 8px;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+      }
+      .marker-countries button[aria-pressed="false"] {
+        background: #141924;
+        border-color: #3b4352;
+        color: #a1aaba;
+      }
+      .marker-countries button[aria-pressed="false"] .country-flag {
+        opacity: 0.35;
+        filter: grayscale(1);
+      }
+      .marker-countries button:focus-visible {
+        outline: 2px solid #9ccaff;
+        outline-offset: 2px;
+      }
+      .country-flag {
+        font-size: 18px;
+        vertical-align: middle;
+      }
+      [data-marker-country="SU"] .country-flag {
+        display: inline-block;
+        background: #a91c24;
+        color: #ffdc5e;
+        width: 24px;
+        text-align: center;
+        font-size: 17px;
+        line-height: 17px;
+      }
+      .panel details {
+        font-size: 12px;
+      }
+      .panel label {
+        display: block;
+        margin: 10px 0;
+      }
+      .panel select,
+      .panel input[type="range"] {
+        display: block;
+        margin-top: 4px;
+        width: 100%;
+        padding: 5px;
+      }
+      .panel p {
+        margin: 10px 0;
+      }
+      .panel small {
+        display: block;
+        color: #b4bed1;
+      }
+      #startup-status {
+        position: fixed;
+        inset: 40% 0 auto;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="startup-status" role="status">Loading globe code…</p>
+    <script type="module" src="/examples/planets/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,58 @@
+{
+  "name": "tiled-globe",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "data:ocean-mask": "node scripts/ocean-mask.ts",
+    "dev": "vite",
+    "build": "npm run typecheck && npm run build:lib && npm run build:example",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts",
+    "preview": "vite preview",
+    "wasm:build": "node scripts/build-wasm.ts",
+    "wasm:setup": "node scripts/setup-wasm.ts",
+    "benchmark:bounds": "node scripts/benchmark-bounds.ts",
+    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
+    "build:example": "vite build",
+    "prepack": "npm run build:lib",
+    "benchmark:terrain:prepare": "node scripts/prepare-terrain-benchmark.ts"
+  },
+  "devDependencies": {
+    "@takram/three-atmosphere": "0.19.1",
+    "@takram/three-geospatial": "0.9.1",
+    "@types/node": "^26.6.5",
+    "@types/three": "^0.186.0",
+    "prettier": "^3.9.10",
+    "three": "^0.186.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  },
+  "description": "Spherical tiled globe rendering and streaming for Three.js WebGPU",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/library/types/index.d.ts",
+      "import": "./dist/library/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/library/types/index.d.ts",
+  "module": "./dist/library/index.js",
+  "files": [
+    "dist/library",
+    "native",
+    "docs",
+    "examples/moon/README.md"
+  ],
+  "peerDependencies": {
+    "three": ">=0.186.0 <0.187.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "pmtiles": "4.5.0",
+    "satellite.js": "^7.1.0"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_ocean.geojson",
+  "credit": "Made with Natural Earth",
+  "license": "Public domain",
+  "width": 4096,
+  "height": 2048,
+  "format": "R8, 255 ocean, 0 land, north-to-south rows, -180 to +180 longitude",
+  "sourceSha256": "5b810162af4b20805838cfd766ef1a445c350cf6aafc8b589515daef30033adf",
+  "sha256": "d6785fc2e5757d1cfb61458920e28c221643a61da795d71dc2fa3f385e5b0649",
+  "bytes": 8388608,
+  "compressedBytes": 57423
+}

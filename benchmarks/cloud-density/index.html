@@ -1,0 +1,22 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Cloud density port validation</title>
+<style>
+  body {
+    font: 16px system-ui;
+    background: #111827;
+    color: #eee;
+    max-width: 60rem;
+    margin: 3rem auto;
+  }
+  pre {
+    white-space: pre-wrap;
+  }
+</style>
+<h1>WGSL cloud density validation</h1>
+<p>
+  Compares GPU results with the upstream scalar equations, including layer boundaries and detail
+  transitions.
+</p>
+<pre id="result">Running…</pre>
+<script type="module" src="./runner.ts"></script>

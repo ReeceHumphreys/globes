@@ -1,0 +1,97 @@
+import {
+  MathUtils,
+  Quaternion,
+  Raycaster,
+  Vector2,
+  Vector3,
+  type PerspectiveCamera,
+} from "three/webgpu";
+
+const _raycaster = new Raycaster();
+const _pointer = new Vector2();
+const _anchorTurn = new Quaternion();
+
+/** Nearest visible intersection with the reference surface; no terrain raycasting. */
+export function pickGlobe(
+  camera: PerspectiveCamera,
+  x: number,
+  y: number,
+  radius: number,
+  target: Vector3,
+): boolean {
+  camera.updateMatrixWorld(true);
+  _pointer.set(x, y);
+  _raycaster.setFromCamera(_pointer, camera);
+  const { origin, direction } = _raycaster.ray;
+  const b = origin.dot(direction);
+  // This form avoids subtracting two planet-sized squared lengths near the surface.
+  const c = (origin.length() - radius) * (origin.length() + radius);
+  const discriminant = b * b - c;
+  if (discriminant < 0) return false;
+  const root = Math.sqrt(discriminant);
+  const distance = b < 0 ? c / (-b + root) : -b - root;
+  if (distance < 0) return false;
+  target.copy(origin).addScaledVector(direction, distance).normalize();
+  return true;
+}
+
+/** Rotate the camera so the newly picked ground moves beneath the original anchor. */
+export function anchorOrbit(camera: PerspectiveCamera, current: Vector3, anchor: Vector3): void {
+  _anchorTurn.setFromUnitVectors(current, anchor);
+  camera.position.applyQuaternion(_anchorTurn);
+  camera.up.applyQuaternion(_anchorTurn);
+}
+
+const _radial = new Vector3();
+const _up = new Vector3();
+const _right = new Vector3();
+const _turn = new Quaternion();
+const _pitch = new Quaternion();
+
+// World north is parallel to the view at either pole, so a Y-up orbit twists there.
+// Keep the stored up vector tangent to the position and carry it with the drag.
+function orientUp(camera: PerspectiveCamera): void {
+  _radial.copy(camera.position).normalize();
+  _up.copy(camera.up).addScaledVector(_radial, -camera.up.dot(_radial));
+  if (_up.lengthSq() < 1e-16) {
+    _up.set(0, 1, 0).addScaledVector(_radial, -_radial.y);
+    if (_up.lengthSq() < 1e-16) _up.set(0, 0, 1).addScaledVector(_radial, -_radial.z);
+  }
+  camera.up.copy(_up.normalize());
+}
+
+// Angle from straight down to the horizon. Past this, the view leaves the surface.
+export function horizonTilt(distance: number, radius: number): number {
+  return Math.asin(Math.min(1, radius / Math.max(distance, radius)));
+}
+
+// A full screen of drag covers the ground span of the vertical field of view,
+// and never spins faster than one turn.
+export function orbitRotateSpeed(altitude: number, radius: number, fovDegrees: number): number {
+  const half = MathUtils.degToRad(fovDegrees) / 2;
+  return Math.min(1, (Math.max(altitude, 0) * Math.tan(half)) / (Math.PI * radius));
+}
+
+// Yaw, then pitch. Positive heading turns toward screen-right; positive tilt pitches toward the horizon.
+export function aimAtOrigin(camera: PerspectiveCamera, tilt: number, heading = 0): void {
+  if (camera.position.lengthSq() === 0) return;
+  orientUp(camera);
+  camera.lookAt(0, 0, 0);
+  camera.rotateZ(-heading);
+  camera.rotateX(tilt);
+}
+
+// Screen-space orbit around the origin. Positive yaw is a rightward drag (camera
+// moves screen-left). Positive pitch is a downward drag (camera moves screen-up).
+export function orbitAroundOrigin(camera: PerspectiveCamera, yaw: number, pitch: number): void {
+  if (camera.position.lengthSq() === 0 || (yaw === 0 && pitch === 0)) return;
+  orientUp(camera);
+  _radial.copy(camera.position).normalize();
+  _right.crossVectors(camera.up, _radial).normalize();
+  _turn.setFromAxisAngle(camera.up, -yaw);
+  _pitch.setFromAxisAngle(_right, -pitch);
+  _turn.multiply(_pitch);
+  camera.position.applyQuaternion(_turn);
+  camera.up.applyQuaternion(_turn);
+  orientUp(camera);
+}

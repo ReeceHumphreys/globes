@@ -1,7 +1,5 @@
 /** CPU ownership only. GPU resources and compute dispatch stay in terrain-compute.ts. */
 export interface TerrainCacheOptions {
-  normals?: boolean;
-  sunlight?: boolean;
   /** Bounded geometry-patch slots, independent of height residency. */
   sunlightSlots?: number;
   gradientTilesPerFrame?: number;
@@ -9,11 +7,8 @@ export interface TerrainCacheOptions {
   /** Quiet period before baking sunlight after an input change. */
   settleMs?: number;
 }
-export function terrainCacheSettings(value: false | TerrainCacheOptions = {}) {
-  const options = value === false ? { normals: false, sunlight: false } : value;
+export function terrainCacheSettings(options: TerrainCacheOptions = {}) {
   const result = {
-    normals: options.normals ?? true,
-    sunlight: options.sunlight ?? true,
     sunlightSlots: options.sunlightSlots ?? 128,
     gradientTilesPerFrame: options.gradientTilesPerFrame ?? 4,
     sunlightTilesPerFrame: options.sunlightTilesPerFrame ?? 4,

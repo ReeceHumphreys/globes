@@ -15,7 +15,8 @@ dist/
 /public/data/moon/apollo/
 
 /public/data/moon/elevation-tiles/
-/public/data/earth/
+/public/data/earth/*
+!/public/data/earth/night-lights/
 /public/data/mars/
 
 # Local GPU benchmark fixture generated from downloaded elevation.

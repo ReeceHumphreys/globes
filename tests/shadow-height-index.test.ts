@@ -20,9 +20,9 @@ test("GPU shadow index keeps six roots, sparse deep paths and the same height fa
     x: 0,
     y: 0,
     slot: face + 1,
-    start: 0,
+    fadeStart: 0,
   }));
-  records.push({ face: 3, level: 20, x: 524287, y: 524289, slot: 7, start: 100 });
+  records.push({ face: 3, level: 20, x: 524287, y: 524289, slot: 7, fadeStart: 100 });
   index.write(records, 250, 300);
   assert.ok(index.nodeCount() <= 26);
   for (let face = 0; face < 6; face++) assert.equal(lookup(index, face, 0, 0, 0).slot, face + 1);
@@ -50,7 +50,7 @@ test("64 independent deep branches stay inside the preallocated shadow index", (
     x: (i * 7919) % 1048576,
     y: (i * 65537) % 1048576,
     slot: i + 1,
-    start: 0,
+    fadeStart: 0,
   }));
   index.write(records, 0, 0);
   for (const r of records)
@@ -61,7 +61,7 @@ test("64 independent deep branches stay inside the preallocated shadow index", (
 
 test("stable height index avoids uploads; fades, evictions and slot reuse advance its revision", () => {
   const index = createShadowHeightIndex(6, 4);
-  const records = [{ face: 0, level: 0, x: 0, y: 0, slot: 1, start: 0 }];
+  const records = [{ face: 0, level: 0, x: 0, y: 0, slot: 1, fadeStart: 0 }];
   index.write(records, 100, 300);
   const revision = index.revision,
     version = index.texture.version;

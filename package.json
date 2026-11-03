@@ -10,17 +10,12 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.ts",
     "preview": "vite preview",
-    "wasm:build": "node scripts/build-wasm.ts",
-    "wasm:setup": "node scripts/setup-wasm.ts",
-    "benchmark:bounds": "node scripts/benchmark-bounds.ts",
     "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
     "build:example": "vite build",
     "prepack": "npm run build:lib",
     "benchmark:terrain:prepare": "node scripts/prepare-terrain-benchmark.ts"
   },
   "devDependencies": {
-    "@takram/three-atmosphere": "0.19.1",
-    "@takram/three-geospatial": "0.9.1",
     "@types/node": "^26.6.5",
     "@types/three": "^0.186.0",
     "prettier": "^3.9.10",
@@ -41,18 +36,13 @@
   "module": "./dist/library/index.js",
   "files": [
     "dist/library",
-    "native",
     "docs",
     "examples/moon/README.md"
   ],
   "peerDependencies": {
     "three": ">=0.186.0 <0.187.0"
   },
-  "engines": {
-    "node": ">=24.0.0"
-  },
   "dependencies": {
-    "pmtiles": "4.5.0",
-    "satellite.js": "^7.1.0"
+    "pmtiles": "4.5.0"
   }
 }

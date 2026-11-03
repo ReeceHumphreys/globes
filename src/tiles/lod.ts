@@ -1,10 +1,13 @@
-import { heightRangeForTile, type HeightRanges } from "../elevation/ranges.ts";
-import { faceToWorld, worldToFace } from "./roots.ts";
+import { worldToFace } from "./roots.ts";
 
 const elevations = new Float64Array(2);
 const patch = new Float64Array(3);
 const cameraOnFace = new Float64Array(3);
-const direction = new Float64Array(3);
+
+/** Conservative min/max terrain height, in meters, over one quadtree tile. */
+export interface HeightRanges {
+  rangeForTile(face: number, level: number, x: number, y: number, out: Float64Array): void;
+}
 
 // 35 float64 values. ProjectionScale = viewportHeight / (2 * tan(verticalFov / 2)).
 export const VIEW = {
@@ -66,19 +69,7 @@ export function projectedCellPixels(
   let low = view[VIEW.MinElevation],
     high = view[VIEW.MaxElevation];
   if (heights) {
-    faceToWorld(face, patch[0], patch[1], patch[2], direction);
-    heightRangeForTile(
-      heights,
-      face,
-      level,
-      x,
-      y,
-      direction[0],
-      direction[1],
-      direction[2],
-      chord,
-      elevations,
-    );
+    heights.rangeForTile(face, level, x, y, elevations);
     low = elevations[0];
     high = elevations[1];
   }

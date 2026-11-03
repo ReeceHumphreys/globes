@@ -12,7 +12,6 @@ struct Parameters {
   // face id (separate from the height cache's layer address)
   face: vec4<f32>,
 }
-@group(0) @binding(0) var globalHeight: texture_2d<f32>;
 @group(0) @binding(1) var heights: texture_2d_array<f32>;
 @group(0) @binding(2) var heightIndex: texture_2d<f32>;
 @group(0) @binding(3) var gradients: texture_2d_array<f32>;
@@ -89,7 +88,7 @@ fn sampleUV(index:u32) -> vec2<f32> {
 fn directNormals(@builtin(global_invocation_id) id:vec3<u32>) {
   if(id.x>=arrayLength(&results)) {return;}
   let uv=sampleUV(id.x);
-  let normal=surfaceNormal(globalHeight,heights,cubeDirection(uv),uv,params.record.yz,params.bestUV,params.parentUV,params.record.w,1.0,params.face.x,params.faceUV.zw,params.limits.x,1.0);
+  let normal=surfaceNormal(heights,cubeDirection(uv),uv,params.record.yz,params.bestUV,params.parentUV,params.record.w,params.face.x,params.faceUV.zw,params.limits.x,1.0);
   results[id.x]=vec4<f32>(normal,1.0);
 }
 @compute @workgroup_size(64)
@@ -100,8 +99,8 @@ fn cachedNormals(@builtin(global_invocation_id) id:vec3<u32>) {
 }
 fn sunlightAt(uv:vec2<f32>) -> f32 {
   let direction=cubeDirection(uv);
-  let height=sampleSurfaceHeight(globalHeight,heights,direction,uv,params.record.yz,params.bestUV,params.parentUV,params.record.w,1.0,1.0);
-  return terrainSunlight(globalHeight,heights,heightIndex,direction,height,params.solar.xyz,params.limits.x,params.limits.y,1.0,params.sampling.x,params.sampling.y,params.limits.w,params.limits.z,params.sampling.w,params.sampling.z,1.0,params.solar.w);
+  let height=sampleSurfaceHeight(heights,direction,uv,params.record.yz,params.bestUV,params.parentUV,params.record.w,1.0);
+  return terrainSunlight(heights,heightIndex,direction,height,params.solar.xyz,params.limits.x,params.limits.y,params.sampling.x,params.sampling.y,params.limits.w,params.limits.z,params.sampling.w,params.sampling.z,1.0,params.solar.w);
 }
 @compute @workgroup_size(8,8,1)
 fn buildSunlight(@builtin(global_invocation_id) id:vec3<u32>) {
@@ -132,7 +131,7 @@ fn hybridNormals(@builtin(global_invocation_id) id:vec3<u32>) {
   let uv=sampleUV(id.x);
   var normal=vec3<f32>(0.0);
   if(params.record.w<1.0) {
-    normal=surfaceNormal(globalHeight,heights,cubeDirection(uv),uv,params.record.yz,params.bestUV,params.parentUV,params.record.w,1.0,params.face.x,params.faceUV.zw,params.limits.x,1.0);
+    normal=surfaceNormal(heights,cubeDirection(uv),uv,params.record.yz,params.bestUV,params.parentUV,params.record.w,params.face.x,params.faceUV.zw,params.limits.x,1.0);
   } else { normal=cachedNormal(uv,cubeDirection(uv)); }
   results[id.x]=vec4<f32>(normal,1.0);
 }

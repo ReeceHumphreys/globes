@@ -4,6 +4,7 @@ import { createTileBatch, TILE_BYTES } from "../src/tiles/tile.ts";
 import { FACE_COUNT, FACE_NAMES } from "../src/tiles/roots.ts";
 import { selectTiles } from "../src/tiles/quadtree.ts";
 import { createSelectionView, VIEW } from "../src/tiles/lod.ts";
+import { createResidentTiles } from "../src/tiles/resident-tiles.ts";
 import { tileColor } from "../src/rendering/tile-colors.ts";
 import {
   createTileInstances,
@@ -139,4 +140,33 @@ test("tile and instance columns keep a fixed order in one buffer", () => {
   assert.equal(instances.buffer.byteLength, 24 * INSTANCE_BYTES);
   assert.equal(instances.centers.byteOffset, 4 * 24 * 4);
   assert.equal(instances.faces.byteOffset, 17 * 24 * 4);
+});
+
+test("resident tiles plan again only when their inputs change", () => {
+  let checks = 0;
+  const tiles = createResidentTiles({
+    slots: 6,
+    label: "Test",
+    maxLevel: () => 1,
+    available: () => (checks++, true),
+    load: async () => ({}),
+    store: () => ({}),
+    onChange() {},
+  });
+  const instances = createTileInstances(1);
+  instances.count = 1;
+  instances.faceUVs.set([0, 0, 0.5, 0.5]);
+  instances.origin.set([1, 0, 0]);
+  tiles.plan(instances, [1]);
+  const planned = checks;
+  assert.ok(planned > 0);
+  tiles.plan(instances, [1]);
+  assert.equal(checks, planned);
+  tiles.plan(instances, [2]);
+  assert.ok(checks > planned);
+  const reprioritized = checks;
+  tiles.invalidate();
+  tiles.plan(instances, [2]);
+  assert.ok(checks > reprioritized);
+  tiles.dispose();
 });

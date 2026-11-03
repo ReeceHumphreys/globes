@@ -44,7 +44,7 @@ for (const feature of collection.features) {
     }
   }
 }
-const directory = new URL("../examples/planets/assets/ocean/", import.meta.url);
+const directory = new URL("../examples/viewer/assets/ocean/", import.meta.url);
 await mkdir(directory, { recursive: true });
 const packed = gzipSync(pixels, { level: 9 });
 await writeFile(new URL("water-mask.bin.gz", directory), packed);

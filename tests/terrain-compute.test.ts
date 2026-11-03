@@ -58,9 +58,14 @@ function fixture(
     manifest: { tileSize: 16, gutter: 2, maxLevel: 4, minMeters: -100, maxMeters: 100 },
     needsFrame: () => fading,
   };
-  const layer = createTileLayer(1737400, 32, instances, undefined, undefined, undefined, options);
+  const layer = createTileLayer({
+    radiusMeters: 1737400,
+    segments: 32,
+    instances,
+    caches: options,
+  });
   layer.setHeightTiles(heights);
-  layer.setSurfaceLayer("terrain");
+  layer.set({ layer: "terrain" });
   layer.commit(instances);
   const jobs: string[] = [],
     errors: unknown[] = [],
@@ -164,29 +169,6 @@ test("GPU caches compile lazily, bake within budgets, reuse camera-only frames, 
   assert.deepEqual(f.errors, []);
   assert.ok(f.requests > 0);
   assert.equal(f.layer.group.children[0].geometry.getAttribute("heightBlendFace").itemSize, 4);
-});
-
-test("turning either cache off frees its large texture and preserves the other path", async (t) => {
-  const f = fixture();
-  t.after(() => f.dispose());
-  f.update(0);
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  f.update(10);
-  f.update(20);
-  const bytes = f.layer.cacheStats().bytes;
-  f.layer.setNormalCacheEnabled(false);
-  f.update(30);
-  assert.ok(f.flags().every((v) => v < 256));
-  assert.ok(f.layer.cacheStats().bytes < bytes);
-  f.layer.setSunlightCacheEnabled(false);
-  f.update(40);
-  assert.ok(f.flags().every((v) => v === 0));
-  assert.equal(f.layer.cacheStats().bytes, 12);
-  f.layer.setNormalCacheEnabled(true);
-  f.update(50);
-  assert.ok(f.flags().every((v) => v === 256));
 });
 
 test("compute submission errors clear all flags and retain the direct shader fallback", async (t) => {

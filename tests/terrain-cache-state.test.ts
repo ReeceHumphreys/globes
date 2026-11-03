@@ -53,7 +53,6 @@ test("bounded sunlight cache protects the current frame and evicts old patches s
 });
 test("cache budgets validate before allocating GPU resources", () => {
   assert.equal(terrainCacheSettings().sunlightSlots, 128);
-  assert.equal(terrainCacheSettings(false).normals, false);
   for (const sunlightSlots of [0, 256, Infinity, 1.5])
     assert.throws(() => terrainCacheSettings({ sunlightSlots }));
   for (const settleMs of [-1, Infinity, NaN])

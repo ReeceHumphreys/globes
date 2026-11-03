@@ -6,7 +6,7 @@ export type ShadowHeightRecord = {
   x: number;
   y: number;
   slot: number;
-  start?: number;
+  fadeStart?: number;
 };
 // Sparse quadtree: one RGBA texel of children, one of (slot, fade, 0, 0).
 // Six roots stay addressable even while some source tiles are still loading.
@@ -43,11 +43,11 @@ export function createShadowHeightIndex(residentLimit: number, maxLevel: number)
       }
       data[node * 8 + 4] = record.slot;
       const t =
-        record.start === undefined
+        record.fadeStart === undefined
           ? 0
           : fadeMs === 0
             ? 1
-            : Math.min(1, Math.max(0, (now - record.start) / fadeMs));
+            : Math.min(1, Math.max(0, (now - record.fadeStart) / fadeMs));
       data[node * 8 + 5] = t * t * (3 - 2 * t);
     }
     if (data.some((value, i) => value !== previous[i])) {

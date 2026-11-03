@@ -1,4 +1,4 @@
-import type { BufferAttribute, CodeNode, Node } from "three/webgpu";
+import type { CodeNode, Node, PerspectiveCamera } from "three/webgpu";
 import {
   DynamicDrawUsage,
   Group,
@@ -6,9 +6,10 @@ import {
   InstancedBufferAttribute,
   InstancedMesh,
   MeshStandardNodeMaterial,
+  Vector3,
 } from "three/webgpu";
 import { attribute, positionGeometry, transformNormalToView, wgslFn } from "three/tsl";
-import type { GlobeContext, GlobeFrame, GlobeLayer } from "tiled-globe";
+import type { TiledGlobe } from "tiled-globe";
 
 // Drawn only near the surface. The shader grows each rock from its seed;
 // this file only decides which seeds exist and where they sit.
@@ -233,92 +234,78 @@ function instanced(name: string, itemSize: number): InstancedBufferAttribute {
   return attribute;
 }
 
-/** Moon-example layer. Shares the globe Sun; does not move the camera or cast terrain shadows. */
-export function rockLayer(): GlobeLayer {
-  let group: Group | undefined;
-  let mesh: InstancedMesh | undefined;
-  let centerAttr: InstancedBufferAttribute | undefined;
-  let axisX: InstancedBufferAttribute | undefined;
-  let axisY: InstancedBufferAttribute | undefined;
-  let axisZ: InstancedBufferAttribute | undefined;
-  let seedAttr: InstancedBufferAttribute | undefined;
-  const axes = new Float32Array(ROCK_CAPACITY * 9);
+const _camera = new Vector3(),
+  _direction = new Vector3();
 
-  function touch(attribute: BufferAttribute | undefined): void {
-    if (!attribute) return;
-    attribute.needsUpdate = true;
+/** Instanced rocks near the camera. Add to the Moon globe and call `update` each frame. */
+export class SurfaceRocks extends Group {
+  readonly #mesh: InstancedMesh;
+  readonly #attributes: Record<
+    "center" | "axisX" | "axisY" | "axisZ" | "seed",
+    InstancedBufferAttribute
+  >;
+  readonly #axes = new Float32Array(ROCK_CAPACITY * 9);
+
+  constructor() {
+    super();
+    // shortcut: rocks can intersect a lunar module, and they pop in at 80 m. Split them from the lander, or fade the gate, if either shows.
+    this.name = "Surface rocks (camera relative)";
+    const geometry = new IcosahedronGeometry(1, 2);
+    this.#attributes = {
+      center: instanced("center", 3),
+      axisX: instanced("axisX", 3),
+      axisY: instanced("axisY", 3),
+      axisZ: instanced("axisZ", 3),
+      seed: instanced("seed", 1),
+    };
+    for (const [name, attribute] of Object.entries(this.#attributes))
+      geometry.setAttribute(name, attribute);
+    const mesh = (this.#mesh = new InstancedMesh(geometry, rockMaterial(), ROCK_CAPACITY));
+    mesh.name = "rocks";
+    mesh.count = 0;
+    mesh.frustumCulled = false;
+    // The shader places each rock. An identity instance matrix keeps that position
+    // whether the instance transform is applied before or after positionNode.
+    const matrices = mesh.instanceMatrix.array as Float32Array;
+    for (let i = 0; i < ROCK_CAPACITY; i++) {
+      const o = i * 16;
+      matrices[o] = matrices[o + 5] = matrices[o + 10] = matrices[o + 15] = 1;
+    }
+    mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+    mesh.instanceMatrix.needsUpdate = true;
+    this.add(mesh);
   }
 
-  return {
-    id: "surface-rocks",
-    attach(context: GlobeContext) {
-      // shortcut: rocks can intersect a lunar module, and they pop in at 80 m. Split them from the lander, or fade the gate, if either shows.
-      group = new Group();
-      group.name = "Surface rocks (camera relative)";
-      const geometry = new IcosahedronGeometry(1, 2);
-      centerAttr = instanced("center", 3);
-      axisX = instanced("axisX", 3);
-      axisY = instanced("axisY", 3);
-      axisZ = instanced("axisZ", 3);
-      seedAttr = instanced("seed", 1);
-      geometry.setAttribute("center", centerAttr);
-      geometry.setAttribute("axisX", axisX);
-      geometry.setAttribute("axisY", axisY);
-      geometry.setAttribute("axisZ", axisZ);
-      geometry.setAttribute("seed", seedAttr);
-      const material = rockMaterial();
-      mesh = new InstancedMesh(geometry, material, ROCK_CAPACITY);
-      mesh.name = "rocks";
-      mesh.count = 0;
-      mesh.frustumCulled = false;
-      // The shader places each rock. An identity instance matrix keeps that position
-      // whether the instance transform is applied before or after positionNode.
-      const matrices = mesh.instanceMatrix.array as Float32Array;
-      for (let i = 0; i < ROCK_CAPACITY; i++) {
-        const o = i * 16;
-        matrices[o] = matrices[o + 5] = matrices[o + 10] = matrices[o + 15] = 1;
-      }
-      mesh.instanceMatrix.setUsage(DynamicDrawUsage);
-      mesh.instanceMatrix.needsUpdate = true;
-      group.add(mesh);
-      context.scene.add(group);
-    },
-    update({ context }: GlobeFrame) {
-      if (!group || !mesh || !centerAttr || !axisX || !axisY || !axisZ || !seedAttr) return;
-      const camera = context.camera.position;
-      group.position.copy(camera);
-      const count = scatterRocks(
-        camera.x,
-        camera.y,
-        camera.z,
-        context.body.radiusMeters,
-        context.sampleHeight,
-        centerAttr.array as Float32Array,
-        axes,
-        seedAttr.array as Float32Array,
-      );
-      const x = axisX.array as Float32Array;
-      const y = axisY.array as Float32Array;
-      const z = axisZ.array as Float32Array;
-      for (let i = 0; i < count; i++) {
-        const o = i * 9;
-        x.set(axes.subarray(o, o + 3), i * 3);
-        y.set(axes.subarray(o + 3, o + 6), i * 3);
-        z.set(axes.subarray(o + 6, o + 9), i * 3);
-      }
-      mesh.count = count;
-      mesh.visible = count > 0;
-      touch(centerAttr);
-      touch(axisX);
-      touch(axisY);
-      touch(axisZ);
-      touch(seedAttr);
-    },
-    dispose() {
-      mesh?.geometry.dispose();
-      (mesh?.material as MeshStandardNodeMaterial | undefined)?.dispose();
-      group?.removeFromParent();
-      group = mesh = centerAttr = axisX = axisY = axisZ = seedAttr = undefined;
-    },
-  };
+  /** Scatter rocks around the camera on the globe's terrain. */
+  update(camera: PerspectiveCamera, globe: TiledGlobe): void {
+    globe.worldToLocal(camera.getWorldPosition(_camera));
+    // Rock vertices are camera-relative, so float32 stays exact next to the viewer.
+    this.position.copy(_camera);
+    const { center, axisX, axisY, axisZ, seed } = this.#attributes;
+    const count = scatterRocks(
+      _camera.x,
+      _camera.y,
+      _camera.z,
+      globe.radius,
+      (x, y, z) => globe.heightAt(_direction.set(x, y, z)),
+      center.array as Float32Array,
+      this.#axes,
+      seed.array as Float32Array,
+    );
+    for (let i = 0; i < count; i++) {
+      const o = i * 9;
+      (axisX.array as Float32Array).set(this.#axes.subarray(o, o + 3), i * 3);
+      (axisY.array as Float32Array).set(this.#axes.subarray(o + 3, o + 6), i * 3);
+      (axisZ.array as Float32Array).set(this.#axes.subarray(o + 6, o + 9), i * 3);
+    }
+    this.#mesh.count = count;
+    this.#mesh.visible = count > 0;
+    for (const attribute of Object.values(this.#attributes)) attribute.needsUpdate = true;
+  }
+
+  dispose(): void {
+    this.#mesh.geometry.dispose();
+    (this.#mesh.material as MeshStandardNodeMaterial).dispose();
+    this.removeFromParent();
+  }
 }

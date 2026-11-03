@@ -1,5 +1,4 @@
-import { heightRangeForTile, type HeightRanges } from "../elevation/ranges.ts";
-import { measurePatch, VIEW, type SelectionView } from "./lod.ts";
+import { measurePatch, VIEW, type HeightRanges, type SelectionView } from "./lod.ts";
 import { faceToWorld } from "./roots.ts";
 
 const elevations = new Float64Array(2);
@@ -25,18 +24,7 @@ export function tileVisible(
   let low = view[VIEW.MinElevation],
     high = view[VIEW.MaxElevation];
   if (heights) {
-    heightRangeForTile(
-      heights,
-      face,
-      level,
-      x,
-      y,
-      direction[0],
-      direction[1],
-      direction[2],
-      chord,
-      elevations,
-    );
+    heights.rangeForTile(face, level, x, y, elevations);
     low = elevations[0];
     high = elevations[1];
   }

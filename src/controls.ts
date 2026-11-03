@@ -8,21 +8,6 @@ import {
   pickGlobe,
 } from "./orbit.ts";
 
-/** A moving point the camera orbits instead of the body center, such as a spacecraft. */
-export interface CameraFocus {
-  /** Writes the point to orbit, in scene meters, for the frame being rendered. */
-  target(out: THREE.Vector3): void;
-  /** Initial camera distance from the target. Defaults to 30 m. */
-  distanceMeters?: number;
-  minDistanceMeters?: number;
-  maxDistanceMeters?: number;
-}
-
-const _focusTarget = new THREE.Vector3(),
-  _focusUp = new THREE.Vector3(),
-  _focusNorth = new THREE.Vector3(),
-  _focusEast = new THREE.Vector3();
-
 // Input owns the camera only. Selection and rendering remain demand-driven in the engine.
 export function createOrbitInput(
   canvas: HTMLCanvasElement,
@@ -39,10 +24,6 @@ export function createOrbitInput(
     hit = new THREE.Vector3();
   let anchored = false,
     pinchDistance = 0;
-  // Focus orbit: spherical offset in the target's local frame (up is radial, azimuth from north).
-  let focus: Required<CameraFocus> | undefined,
-    focusAzimuth = 0,
-    focusElevation = 0.3;
   const oldTouchAction = canvas.style.touchAction;
   canvas.style.touchAction = "none";
   const height = () => Math.max(1, canvas.clientHeight);
@@ -66,35 +47,7 @@ export function createOrbitInput(
     aim();
     anchored = pick(x, y, anchor);
   }
-  function aimFocus() {
-    if (!focus) return;
-    focus.target(_focusTarget);
-    _focusUp.copy(_focusTarget).normalize();
-    if (_focusUp.lengthSq() === 0) _focusUp.set(0, 1, 0);
-    _focusNorth.set(0, 1, 0).addScaledVector(_focusUp, -_focusUp.y);
-    if (_focusNorth.lengthSq() < 1e-12)
-      _focusNorth.set(1, 0, 0).addScaledVector(_focusUp, -_focusUp.x);
-    _focusNorth.normalize();
-    _focusEast.crossVectors(_focusNorth, _focusUp);
-    const flat = Math.cos(focusElevation) * focus.distanceMeters;
-    camera.position
-      .copy(_focusTarget)
-      .addScaledVector(_focusUp, Math.sin(focusElevation) * focus.distanceMeters)
-      .addScaledVector(_focusNorth, -Math.cos(focusAzimuth) * flat)
-      .addScaledVector(_focusEast, -Math.sin(focusAzimuth) * flat);
-    camera.up.copy(_focusUp);
-    camera.lookAt(_focusTarget);
-  }
-  function zoomFocus(factor: number) {
-    focus!.distanceMeters = THREE.MathUtils.clamp(
-      focus!.distanceMeters * factor,
-      focus!.minDistanceMeters,
-      focus!.maxDistanceMeters,
-    );
-    render();
-  }
   function zoomAt(factor: number, x: number, y: number) {
-    if (focus) return zoomFocus(factor);
     aim();
     const hasAnchor = pick(x, y, anchor);
     const ground = groundHeight();
@@ -140,13 +93,6 @@ export function createOrbitInput(
           (a.y + b.y) / 2,
         );
       pinchDistance = distance;
-      return;
-    }
-    if (focus) {
-      const angle = (2 * Math.PI) / height();
-      focusAzimuth = THREE.MathUtils.euclideanModulo(focusAzimuth - dx * angle, Math.PI * 2);
-      focusElevation = THREE.MathUtils.clamp(focusElevation + dy * angle, -1.5, 1.5);
-      render();
       return;
     }
     if (previous.look) {
@@ -210,42 +156,7 @@ export function createOrbitInput(
   canvas.addEventListener("wheel", zoom, { passive: false });
   canvas.addEventListener("dblclick", doubleClick);
   return {
-    aim() {
-      if (focus) aimFocus();
-      else aim();
-    },
-    /** Camera distance from the focus target, or undefined when orbiting the body. */
-    get focusDistance() {
-      return focus?.distanceMeters;
-    },
-    setFocusDistance(meters: number) {
-      if (!focus) return;
-      focus.distanceMeters = THREE.MathUtils.clamp(
-        meters,
-        focus.minDistanceMeters,
-        focus.maxDistanceMeters,
-      );
-    },
-    setFocus(next: CameraFocus | null) {
-      if (!next) {
-        focus = undefined;
-        camera.up.set(0, 1, 0);
-        tilt = heading = 0;
-        return;
-      }
-      const distanceMeters = next.distanceMeters ?? 30,
-        minDistanceMeters = next.minDistanceMeters ?? 1,
-        maxDistanceMeters = next.maxDistanceMeters ?? radius * 9;
-      if (
-        !(minDistanceMeters > 0) ||
-        !(maxDistanceMeters >= minDistanceMeters) ||
-        !(distanceMeters >= minDistanceMeters && distanceMeters <= maxDistanceMeters)
-      )
-        throw new RangeError("Invalid camera focus distances");
-      focus = { target: next.target, distanceMeters, minDistanceMeters, maxDistanceMeters };
-      focusAzimuth = 0;
-      focusElevation = 0.3;
-    },
+    aim,
     reset() {
       tilt = 0;
       heading = 0;
@@ -254,7 +165,6 @@ export function createOrbitInput(
       pointers.clear();
       for (const id of captured) if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
       pinchDistance = 0;
-      focus = undefined;
       camera.up.set(0, 1, 0);
     },
     dispose() {

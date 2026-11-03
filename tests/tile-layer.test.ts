@@ -33,7 +33,7 @@ test("one grid and material bind the producer arrays across zoom levels", () => 
   const radius = 1_737_400;
   const tiles = createTileBatch(384);
   let instances = createTileInstances(384);
-  const layer = createTileLayer(radius, 32, instances);
+  const layer = createTileLayer({ radiusMeters: radius, segments: 32, instances });
   const scene = new Scene();
   scene.add(layer.group);
   const mesh = layer.group.children[0];
@@ -114,46 +114,9 @@ test("one grid and material bind the producer arrays across zoom levels", () => 
   assert.equal(layer.group.children.length, 0);
 });
 
-test("elevation can arrive after first render without recreating geometry or leaking textures", () => {
-  const layer = createTileLayer(1737400, 32, createTileInstances(6));
-  const mesh = layer.group.children[0],
-    geometry = mesh.geometry,
-    material = mesh.material;
-  let elevationNode;
-  material.positionNode.traverse((node) => {
-    if (node.isTextureNode && node.value.name === "Global terrain heights (numeric RG8)")
-      elevationNode = node;
-  });
-  assert.ok(elevationNode);
-  const placeholder = elevationNode.value;
-  let placeholderDisposals = 0,
-    loadedDisposals = 0;
-  placeholder.addEventListener("dispose", () => placeholderDisposals++);
-  const version = material.version;
-  layer.setElevation({
-    width: 2,
-    height: 2,
-    values: new Uint16Array(4).fill(22000),
-    minMeters: 1000,
-    maxMeters: 1000,
-  });
-  assert.equal(mesh.geometry, geometry);
-  assert.equal(mesh.material, material);
-  assert.ok(material.version > version);
-  assert.equal(placeholderDisposals, 1);
-  assert.notEqual(elevationNode.value, placeholder);
-  assert.equal(elevationNode.value.image.width, 2);
-  elevationNode.value.addEventListener("dispose", () => loadedDisposals++);
-  layer.setElevationEnabled(false);
-  layer.setElevationEnabled(true);
-  layer.dispose();
-  layer.dispose();
-  assert.equal(loadedDisposals, 1);
-});
-
 test("tiled elevation uses the existing instance buffer and keeps eight bindings / sixteen attributes", () => {
   const instances = createTileInstances(6),
-    layer = createTileLayer(1737400, 32, instances),
+    layer = createTileLayer({ radiusMeters: 1737400, segments: 32, instances }),
     geometry = layer.group.children[0].geometry;
   try {
     const attributes = Object.values(geometry.attributes),
@@ -173,14 +136,19 @@ test("tiled elevation uses the existing instance buffer and keeps eight bindings
 test("imagery-only consumers do not require a Moon overview texture", () => {
   const texture = new DataArrayTexture(new Uint8Array(4), 1, 1, 1);
   const cache = { texture, bindings: { data: new Float32Array(6 * 11), revision: 0 } };
-  const layer = createTileLayer(3389500, 32, createTileInstances(6), undefined, cache);
+  const layer = createTileLayer({
+    radiusMeters: 3389500,
+    segments: 32,
+    instances: createTileInstances(6),
+    imagery: cache,
+  });
   const parameters = layer.group.children[0].material.colorNode.parameters;
-  layer.setSurfaceLayer("imagery");
+  layer.set({ layer: "imagery" });
   assert.equal(parameters.imageryEnabled.value, 1);
   assert.equal(parameters.tiledImageryEnabled.value, 1);
-  layer.setSurfaceLayer("checker");
+  layer.set({ layer: "checker" });
   assert.equal(parameters.imageryEnabled.value, 0);
-  layer.setSurfaceLayer("imagery");
+  layer.set({ layer: "imagery" });
   assert.equal(parameters.imageryEnabled.value, 1);
   layer.dispose();
   texture.dispose();

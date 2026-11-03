@@ -2,8 +2,7 @@
 // Unloaded finer regions fall back to resident parents, never clamped tile edges.
 // The index walk only records which node it keeps. The height array, the large
 // fetch, is read afterwards for that node and for its parent while the node fades in.
-fn shadowHeight(heightMap: texture_2d<f32>, heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, direction: vec3<f32>, tiled: f32, coreSize: f32, gutter: f32, maxLevel: f32) -> f32 {
-  if (tiled < 0.5) { return sampleElevation(heightMap, direction); }
+fn shadowHeight(heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, direction: vec3<f32>, coreSize: f32, gutter: f32, maxLevel: f32) -> f32 {
   let a = abs(direction);
   var face = 0;
   var uv = vec2<f32>(0.5);

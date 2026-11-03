@@ -5,7 +5,7 @@ No dependency or tileset download has been added by this assessment.
 
 ## Where it fits
 
-The strongest fit is an optional `GlobeLayer` for prepared regional 3D Tiles:
+The strongest fit is a `TilesRenderer` group added to a `TiledGlobe` for prepared regional 3D Tiles:
 Earth buildings/photogrammetry, Mars rover-site reconstructions, and detailed
 lunar site meshes. This complements the global imagery/elevation surface.
 An existing GLB such as our Apollo model does not need a tile renderer by itself.

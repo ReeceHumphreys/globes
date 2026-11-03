@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { PerspectiveCamera, Vector3 } from "three/webgpu";
-import { MOON_RADIUS_M } from "../examples/moon/config.ts";
+const MOON_RADIUS_M = 1_737_400;
 import { aimAtOrigin, horizonTilt, orbitAroundOrigin, orbitRotateSpeed } from "../src/orbit.ts";
 
 test("positive tilt pitches from nadir toward world up", () => {

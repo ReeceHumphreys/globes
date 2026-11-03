@@ -4,17 +4,6 @@ export interface GlobeBody {
   radiusMeters: number;
 }
 
-export function validateBody(body: GlobeBody): void {
-  if (
-    !body ||
-    typeof body.name !== "string" ||
-    !body.name.trim() ||
-    !Number.isFinite(body.radiusMeters) ||
-    body.radiusMeters <= 0
-  )
-    throw new RangeError("A body requires a nonempty name and positive radiusMeters.");
-}
-
 export function matchesBody(
   value: { body?: unknown; radiusMeters?: unknown },
   expected?: GlobeBody,

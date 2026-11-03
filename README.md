@@ -1,62 +1,66 @@
 # tiled-globe
 
-A TypeScript library for spherical, tiled globes using Three.js WebGPU. It
-provides cube-face quadtree selection, one shared instanced terrain grid,
-bounded imagery/elevation streaming, parent fallback, and orbit-to-surface
-camera controls. Surfaces are replaceable, and optional scene layers share camera,
-Sun, viewport, and lifecycle state. The Moon viewer is an application built on this library.
-
-Run `npm run dev` for the [solar system example](examples/planets/README.md).
-It opens on the Sun, Earth, Moon, and Mars. Scrolling in on a body opens that globe, and scrolling out returns to the solar system.
+Streamed, tiled planetary globes for three.js WebGPU. A `TiledGlobe` is an
+ordinary `Object3D`: add it to your scene, update it each frame, and it selects
+cube-face quadtree tiles for your camera, streams imagery and elevation into
+bounded GPU caches, and draws them with one instanced grid. `GlobeControls`
+orbits and zooms down to the surface, like `OrbitControls`.
 
 ```ts
-import { createGlobe, tiledSurface, createSunLayer } from "tiled-globe";
+import * as THREE from "three/webgpu";
+import { TiledGlobe, GlobeControls } from "tiled-globe";
 
-const globe = await createGlobe({
-  container: document.querySelector<HTMLDivElement>("#globe")!,
-  body: { name: "Mars", radiusMeters: 3_389_500 },
-  surface: tiledSurface({
-    overview: "/data/mars/overview.jpg",
-    imagery: "/data/mars/imagery/manifest.json",
-    elevation: { tiles: "/data/mars/elevation-tiles/manifest.json" },
-  }),
-  layers: [createSunLayer()],
+const renderer = new THREE.WebGPURenderer({ reversedDepthBuffer: true });
+await renderer.init();
+document.body.append(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 1e9);
+const sun = new THREE.DirectionalLight(0xffffff, 3);
+scene.add(sun, sun.target);
+
+const mars = new TiledGlobe({
+  name: "Mars",
+  radius: 3_396_190,
+  imagery: "/data/mars/imagery/manifest.json",
+  elevation: "/data/mars/elevation-tiles/manifest.json",
+  sun,
 });
+scene.add(mars);
+const controls = new GlobeControls(camera, renderer.domElement, mars);
 
-// Release observers, event handlers, downloads and owned GPU resources.
-// globe.dispose();
+renderer.setAnimationLoop(() => {
+  controls.update();
+  mars.update(camera, renderer);
+  renderer.render(scene, camera);
+});
 ```
 
-The container must have a nonzero size. WebGPU requires a supported browser and
-HTTPS or localhost. Three.js is a peer dependency. There is no built-in UI,
-planetary dataset, marker catalog, atmosphere, or lunar model in the library.
+Run `npm run dev` for the [viewer example](examples/viewer/main.ts): the Moon,
+Earth and Mars, one at a time. WebGPU requires a supported browser and HTTPS or
+localhost. three.js is a peer dependency.
 
-- [Installation and API](docs/library.md)
-- [Surface and scene-layer composition](docs/composition.md)
-- [Shared lighting environments](docs/environments.md)
-- [3D Tiles integration assessment](docs/3d-tiles-assessment.md)
-- [Experimental Earth and Mars atmospheres](docs/experimental-atmosphere.md)
-- [Experimental WebGPU clouds](docs/clouds.md)
-- [Earth ocean shading](docs/oceans.md)
-- [Generic markers](docs/markers.md)
-- [Orbiting spacecraft from TLEs and OEMs](docs/spacecraft.md)
+- [Library guide](docs/library.md)
+- [Current rendering/lighting limits](docs/lighting.md)
 - [Shader performance and compute candidates](docs/shader-performance.md)
 - [Measured terrain-cache investigation](docs/terrain-cache-investigation.md)
+- [3D Tiles integration assessment](docs/3d-tiles-assessment.md)
+- [Moon example datasets](examples/moon/README.md)
 - [Generate and serve imagery/elevation tiles](../tile-service/docs/tile-generation.md)
-- [Moon example and its datasets](examples/moon/README.md)
-- [Current rendering/lighting limits](docs/lighting.md)
 
 ## Work in this repository
 
 ```sh
 npm install
-npm run dev             # Moon example, using the library source
+npm run dev             # Viewer example, using the library source
 npm run build           # Package + declarations + demo
-npm run preview         # Production Moon demo
+npm run preview         # Production viewer build
 npm test
 ```
 
-Start `docker compose up -d --build --wait` in the sibling `tile-service` repo first. Dev and preview
+Development needs Node 24 or newer.
+
+The viewer runs on its bundled overview images alone. For streamed imagery and elevation, start
+`docker compose up -d --build --wait` in the sibling `tile-service` repo. Dev and preview
 proxy `/data/moon`, `/data/earth`, and `/data/mars` to `http://127.0.0.1:8787`.
 The viewer never starts or stops the file service. `VITE_TILE_BASE`, set in the
 environment or `.env.local`, overrides the proxy target and selects dataset URLs
@@ -90,9 +94,7 @@ before publishing.
 
 Bodies are spheres with planetocentric latitude and east-positive longitude.
 Earth can use a spherical visualization, but ellipsoid/terrain datum conversion,
-Mercator/XYZ sources, atmospheres, ocean rendering, and time-dependent reference
-frames for the globe itself are not implemented (spacecraft ephemerides are
-rotated into the body-fixed frame). Numeric elevation currently uses the documented
+Mercator/XYZ sources are not implemented. Numeric elevation currently uses the documented
 fixed uint16 encoding; files outside its range are rejected, not clipped.
 
 ## License

@@ -26,8 +26,7 @@ through a sparse resident-height quadtree, rather than clamping to the edge of
 the originating tile. Fine data follows the same parent/fine fade as the height
 cache. The height array is read only for the accepted node, and for its parent
 while that node is still fading in. Missing fine data uses resident coarser
-ancestors or the zero-meter fallback sphere. The legacy global elevation grid
-is also supported.
+ancestors or the zero-meter fallback sphere.
 
 The lookup index is two RGBA32F texels per quadtree node. The default 64-tile,
 20-level allocation is 45,056 bytes. No extra vertex buffers, attributes,

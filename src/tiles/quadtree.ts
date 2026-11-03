@@ -1,8 +1,13 @@
-import type { HeightRanges } from "../elevation/ranges.ts";
 import { tileVisible } from "./visibility.ts";
 import { FACE_COUNT } from "./roots.ts";
 import { assertTileBatch, type TileBatch } from "./tile.ts";
-import { VIEW, VIEW_LENGTH, projectedCellPixels, type SelectionView } from "./lod.ts";
+import {
+  VIEW,
+  VIEW_LENGTH,
+  projectedCellPixels,
+  type HeightRanges,
+  type SelectionView,
+} from "./lod.ts";
 
 // Child q is bottom-left, bottom-right, top-left, top-right: (x*2 + q&1, y*2 + q>>1).
 function forEachChild(

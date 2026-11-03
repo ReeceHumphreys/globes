@@ -5,13 +5,15 @@ fn fragmentColor(
   normal: vec3<f32>, sun: vec3<f32>, view: vec3<f32>, shadingEnabled: f32,
   hapkeEnabled: f32, hapkeParameters: vec4<f32>, hapkeReference: f32, sunlight: f32, neutralTerrain: f32,
   radial: vec3<f32>, radius: f32, pixelMeters: f32, detailEnabled: f32,
-  tileTexels: f32, parentTexels: f32, overviewTexels: f32
+  tileTexels: f32, parentTexels: f32, overviewTexels: f32,
+  sunColor: vec3<f32>, skyLight: vec3<f32>, water: f32, waterRoughness: f32
 ) -> vec3<f32> {
   let checkerResult = checkerColor * mix(vec3<f32>(1.0), faceColor, 0.3);
   // The normal is radial on the global grid and follows the height tile when one
   // is loaded, so a landing-site DTM can put crater walls into night. Multiply
   // only: photographed shadows stay in the picture.
-  var shade = 1.0;
+  // Without an atmosphere sunColor is white and skyLight is black.
+  var light = vec3<f32>(1.0);
   // These are uniform switches: do not evaluate Hapke for an unlit/debug view.
   if (shadingEnabled > 0.5 && imageryEnabled > 0.5) {
     let ndotl = dot(normalize(normal), normalize(sun));
@@ -19,7 +21,7 @@ fn fragmentColor(
     if (hapkeEnabled > 0.5) {
       reflectance = hapkeReflectance(normal,sun,view,hapkeParameters,hapkeReference);
     }
-    shade = shadowedShade(reflectance, ndotl, sunlight);
+    light = shadowedShade(reflectance, ndotl, sunlight) * sunColor + skyLight;
   }
   // Blend source colors first; one lighting multiplication gives the same result.
   let parentResult = mix(overviewColor, parentColor.rgb, parentColor.a);
@@ -37,5 +39,13 @@ fn fragmentColor(
     surface *= mix(vec3<f32>(1.0), vec3<f32>(grain), weight);
   }
   let terrainResult = mix(surface, vec3<f32>(0.35), neutralTerrain);
-  return mix(checkerResult, terrainResult * shade, imageryEnabled);
+  var lit = terrainResult * light;
+  // Open water: a level surface with sun glint and reflected sky, scaled by π to the
+  // terrain's convention (a white Lambert surface under the noon sun reads 1).
+  if (shadingEnabled > 0.5 && imageryEnabled > 0.5 && neutralTerrain < 0.5 && water > 0.001) {
+    let sea = oceanRadiance(terrainResult, radial, view, sun, sunColor, skyLight,
+      skyLight / 3.14159265, sunlight, waterRoughness) * 3.14159265;
+    lit = mix(lit, sea, water);
+  }
+  return mix(checkerResult, lit, imageryEnabled);
 }

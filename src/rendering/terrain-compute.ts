@@ -24,7 +24,6 @@ export interface TerrainCacheStats {
   state: "disabled" | "compiling" | "ready" | "warming" | "settling" | "failed";
 }
 export interface TerrainComputeNodes {
-  heightMap: THREE.Node;
   heightTiles: THREE.Node;
   indexMap: THREE.Node;
   radius: THREE.Node;
@@ -42,27 +41,20 @@ export function createTerrainCompute(
   segments: number,
   nodes: TerrainComputeNodes,
   functions: { direction: FunctionNode; surfaceHeight: FunctionNode; sunlight: FunctionNode },
-  options: false | TerrainCacheOptions,
+  options: TerrainCacheOptions,
 ) {
   const settings = terrainCacheSettings(options);
   const { width, depth } = heights.texture.image as { width: number; depth: number };
   const grid = segments + 1,
     columns = Math.min(16, settings.sunlightSlots),
     rows = Math.ceil(settings.sunlightSlots / columns);
-  const gradients = new THREE.StorageArrayTexture(
-    settings.normals ? width : 1,
-    settings.normals ? width : 1,
-    settings.normals ? depth : 1,
-  );
+  const gradients = new THREE.StorageArrayTexture(width, width, depth);
   gradients.name = "Cached terrain gradients";
   gradients.type = THREE.HalfFloatType;
   gradients.format = THREE.RGBAFormat;
   gradients.colorSpace = THREE.NoColorSpace;
   gradients.generateMipmaps = false;
-  const sunlight = new THREE.StorageTexture(
-    settings.sunlight ? columns * grid : 1,
-    settings.sunlight ? rows * grid : 1,
-  );
+  const sunlight = new THREE.StorageTexture(columns * grid, rows * grid);
   sunlight.name = "Cached patch sunlight";
   sunlight.type = THREE.FloatType;
   sunlight.format = THREE.RedFormat;
@@ -155,12 +147,10 @@ export function createTerrainCompute(
   function updateStats() {
     stats.gradientReady = 0;
     for (let slot = 1; slot < depth; slot++)
-      if (settings.normals && versions[slot] > 0 && versions[slot] === heights.slotVersions[slot])
+      if (versions[slot] > 0 && versions[slot] === heights.slotVersions[slot])
         stats.gradientReady++;
-    stats.sunlightReady = settings.sunlight ? sunState.ready : 0;
-    stats.bytes =
-      (settings.normals ? width * width * depth * 8 : 8) +
-      (settings.sunlight ? columns * rows * grid * grid * 4 : 4);
+    stats.sunlightReady = sunState.ready;
+    stats.bytes = width * width * depth * 8 + columns * rows * grid * grid * 4;
   }
   function prepare(
     renderer: THREE.WebGPURenderer,
@@ -175,8 +165,6 @@ export function createTerrainCompute(
   ) {
     flags.fill(0, 0, instances.count);
     stats.fallbackTiles = instances.count;
-    activeNormals &&= settings.normals;
-    activeSunlight &&= settings.sunlight;
     const changedAt = sunState.begin(`${heights.revision}/${epoch}`, now);
     if (disposed || failed || (!activeNormals && !activeSunlight)) {
       stats.state = failed ? "failed" : "disabled";
@@ -296,20 +284,6 @@ export function createTerrainCompute(
     gradientJob,
     sunlightJob,
     prepare,
-    setNormals(enabled: boolean) {
-      if (settings.normals === enabled) return;
-      settings.normals = enabled;
-      versions.fill(0);
-      gradients.setSize(enabled ? width : 1, enabled ? width : 1, enabled ? depth : 1);
-      gradients.needsUpdate = true;
-    },
-    setSunlight(enabled: boolean) {
-      if (settings.sunlight === enabled) return;
-      settings.sunlight = enabled;
-      sunState.clear();
-      sunlight.setSize(enabled ? columns * grid : 1, enabled ? rows * grid : 1, 1);
-      sunlight.needsUpdate = true;
-    },
     dispose() {
       if (disposed) return;
       disposed = true;

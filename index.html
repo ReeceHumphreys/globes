@@ -40,12 +40,11 @@
         overflow: hidden;
         pointer-events: none;
       }
-      .places span {
-        position: absolute;
+      /* CSS2DRenderer positions labels; these only style them. */
+      .place {
         display: flex;
         flex-direction: column;
         align-items: center;
-        transform: translate(-50%, calc(-100% + 3px));
         color: #f4f7fb;
         font-size: 12px;
         line-height: 1.2;
@@ -54,41 +53,29 @@
           0 1px 2px #000,
           0 0 2px #000;
       }
-      .places span[hidden] {
-        display: none;
-      }
-      .places span[data-landmark] {
-        color: #ffd586;
-      }
-      .places span[data-kind="landing"] {
+      .place[data-kind="landing"] {
         color: #a4e8ff;
       }
-      .places span[data-kind="landing"]::after {
-        background: #a4e8ff;
-      }
-      .places span[data-kind="impact"] {
+      .place[data-kind="impact"] {
         color: #ffb49d;
       }
-      .places span[data-kind="impact"]::after {
-        background: #ffb49d;
-        border-radius: 0;
+      .place[data-kind="landmark"] {
+        color: #ffd586;
       }
-      .places span[data-landmark]::after {
-        background: #ffd586;
-        width: 9px;
-        height: 9px;
-      }
-      .places span::after {
+      .place::after {
         content: "";
         width: 6px;
         height: 6px;
         margin-top: 2px;
         border-radius: 50%;
-        background: #fff;
+        background: var(--dot, currentColor);
         box-shadow: 0 0 0 1px #101218;
       }
       .panel a {
         color: #a9caff;
+      }
+      .panel button.system-button[aria-pressed="true"] {
+        border-color: #9ccaff;
       }
       .panel button.system-button {
         border: 1px solid #61728d;
@@ -178,6 +165,6 @@
   </head>
   <body>
     <p id="startup-status" role="status">Loading globe code…</p>
-    <script type="module" src="/examples/planets/main.ts"></script>
+    <script type="module" src="/examples/viewer/main.ts"></script>
   </body>
 </html>

@@ -12,10 +12,8 @@ const GPUBufferUsage = {
 };
 const GPUMapMode = { READ: 1 };
 import kernels from "./kernels.wgsl?raw";
-import sampleElevation from "../../src/rendering/shaders/sample-elevation.wgsl?raw";
 import sampleLayer from "../../src/rendering/shaders/sample-height-layer.wgsl?raw";
 import sampleSurface from "../../src/rendering/shaders/sample-surface-height.wgsl?raw";
-import reliefNormal from "../../src/rendering/shaders/terrain-normal.wgsl?raw";
 import surfaceNormal from "../../src/rendering/shaders/surface-normal.wgsl?raw";
 import solarVisibility from "../../src/rendering/shaders/solar-visibility.wgsl?raw";
 import shadowHeight from "../../src/rendering/shaders/shadow-height.wgsl?raw";
@@ -46,11 +44,11 @@ interface Fixture {
 }
 const slots = {
   buildGradients: [1, 5],
-  directNormals: [0, 1, 8, 9],
+  directNormals: [1, 8, 9],
   cachedNormals: [3, 4, 8, 9],
-  hybridNormals: [0, 1, 3, 4, 8, 9],
-  buildSunlight: [0, 1, 2, 6, 8],
-  directSunlight: [0, 1, 2, 8, 9],
+  hybridNormals: [1, 3, 4, 8, 9],
+  buildSunlight: [1, 2, 6, 8],
+  directSunlight: [1, 2, 8, 9],
   cachedSunlight: [7, 8, 9],
 } as const;
 type Kernel = keyof typeof slots;
@@ -103,11 +101,6 @@ export async function runTerrainCacheBenchmark(progress: (status: string) => voi
       { bytesPerRow: fixture.indexWidth * 16 },
       [fixture.indexWidth, fixture.indexHeight],
     );
-    const global = device.createTexture({
-      size: [1, 1],
-      format: "rg8unorm",
-      usage: GPUTextureUsage.TEXTURE_BINDING,
-    });
     const gradients = device.createTexture({
       size: [fixture.width, fixture.width, fixture.layers],
       format: "rgba16float",
@@ -133,10 +126,8 @@ export async function runTerrainCacheBenchmark(progress: (status: string) => voi
       ]),
     );
     const shaderCode = [
-      sampleElevation,
       sampleLayer,
       sampleSurface,
-      reliefNormal,
       normalFromGradient,
       surfaceNormal,
       solarVisibility,
@@ -149,7 +140,6 @@ export async function runTerrainCacheBenchmark(progress: (status: string) => voi
     const errors = messages.messages.filter((message) => message.type === "error");
     if (errors.length) throw new Error(errors.map((message) => message.message).join("\n"));
     const resources: Record<number, GPUBindingResource> = {
-      0: global.createView(),
       1: heights.createView({ dimension: "2d-array" }),
       2: index.createView(),
       3: gradients.createView({ dimension: "2d-array" }),

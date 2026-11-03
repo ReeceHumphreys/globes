@@ -95,3 +95,18 @@ export function worldToFace(
       break;
   }
 }
+
+const facePointScratch = new Float64Array(3);
+/** Dominant cube face of a nonzero direction, and its face UV in 0..1. */
+export function facePoint(x: number, y: number, z: number): [number, number, number] {
+  const ax = Math.abs(x),
+    ay = Math.abs(y),
+    az = Math.abs(z),
+    face = ax >= ay && ax >= az ? (x >= 0 ? 0 : 1) : ay >= az ? (y >= 0 ? 2 : 3) : z >= 0 ? 4 : 5;
+  worldToFace(face, x, y, z, facePointScratch);
+  return [
+    face,
+    (facePointScratch[0] / facePointScratch[2] + 1) / 2,
+    (facePointScratch[1] / facePointScratch[2] + 1) / 2,
+  ];
+}

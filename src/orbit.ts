@@ -1,5 +1,6 @@
 import {
   MathUtils,
+  Matrix4,
   Quaternion,
   Raycaster,
   Vector2,
@@ -10,8 +11,20 @@ import {
 const _raycaster = new Raycaster();
 const _pointer = new Vector2();
 const _anchorTurn = new Quaternion();
+const _inverseParent = new Matrix4();
+const _look = new Matrix4();
 
-/** Nearest visible intersection with the reference surface; no terrain raycasting. */
+/**
+ * Orbit math runs in the camera's parent frame, which is the globe's. Object3D.lookAt
+ * takes world space, so aim with the local position, target and up instead.
+ */
+export function lookAtLocal(camera: PerspectiveCamera, target: Vector3): void {
+  _look.lookAt(camera.position, target, camera.up);
+  camera.quaternion.setFromRotationMatrix(_look);
+}
+const _origin = new Vector3();
+
+/** Nearest visible sphere intersection, in the camera's parent frame; no terrain raycasting. */
 export function pickGlobe(
   camera: PerspectiveCamera,
   x: number,
@@ -22,17 +35,32 @@ export function pickGlobe(
   camera.updateMatrixWorld(true);
   _pointer.set(x, y);
   _raycaster.setFromCamera(_pointer, camera);
-  const { origin, direction } = _raycaster.ray;
+  if (camera.parent) {
+    _raycaster.ray.applyMatrix4(_inverseParent.copy(camera.parent.matrixWorld).invert());
+    _raycaster.ray.direction.normalize();
+  }
+  const distance = sphereDistance(_raycaster.ray, radius);
+  if (distance === undefined) return false;
+  target
+    .copy(_raycaster.ray.origin)
+    .addScaledVector(_raycaster.ray.direction, distance)
+    .normalize();
+  return true;
+}
+
+/** Distance along a unit-direction ray to a sphere at the origin, if it hits. */
+export function sphereDistance(
+  { origin, direction }: { origin: Vector3; direction: Vector3 },
+  radius: number,
+): number | undefined {
   const b = origin.dot(direction);
   // This form avoids subtracting two planet-sized squared lengths near the surface.
   const c = (origin.length() - radius) * (origin.length() + radius);
   const discriminant = b * b - c;
-  if (discriminant < 0) return false;
+  if (discriminant < 0) return undefined;
   const root = Math.sqrt(discriminant);
   const distance = b < 0 ? c / (-b + root) : -b - root;
-  if (distance < 0) return false;
-  target.copy(origin).addScaledVector(direction, distance).normalize();
-  return true;
+  return distance < 0 ? undefined : distance;
 }
 
 /** Rotate the camera so the newly picked ground moves beneath the original anchor. */
@@ -76,7 +104,7 @@ export function orbitRotateSpeed(altitude: number, radius: number, fovDegrees: n
 export function aimAtOrigin(camera: PerspectiveCamera, tilt: number, heading = 0): void {
   if (camera.position.lengthSq() === 0) return;
   orientUp(camera);
-  camera.lookAt(0, 0, 0);
+  lookAtLocal(camera, _origin.set(0, 0, 0));
   camera.rotateZ(-heading);
   camera.rotateX(tilt);
 }

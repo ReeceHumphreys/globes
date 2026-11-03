@@ -1,6 +1,5 @@
 import { validateTileStorage, type PMTilesStorage } from "../tiles/tile-source.ts";
 import { matchesBody, type GlobeBody } from "../body.ts";
-import { worldToFace } from "../tiles/roots.ts";
 export const HEIGHT_STRIDE = 13;
 export interface HeightTileInfo {
   path: string;
@@ -160,16 +159,6 @@ export function sampleTile(values: Uint16Array, width: number, x: number, y: num
     10000
   );
 }
-const local = new Float64Array(3);
-export function facePoint(x: number, y: number, z: number): [number, number, number] {
-  const ax = Math.abs(x),
-    ay = Math.abs(y),
-    az = Math.abs(z),
-    face = ax >= ay && ax >= az ? (x >= 0 ? 0 : 1) : ay >= az ? (y >= 0 ? 2 : 3) : z >= 0 ? 4 : 5;
-  worldToFace(face, x, y, z, local);
-  return [face, (local[0] / local[2] + 1) / 2, (local[1] / local[2] + 1) / 2];
-}
-
 export function parseHeightPage(
   value: unknown,
   prefix: string,

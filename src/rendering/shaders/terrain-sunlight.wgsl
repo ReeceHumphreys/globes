@@ -4,7 +4,7 @@
 // Visibility feathers instead of clipping to 0/1, so the interpolated edge is a
 // penumbra rather than a hard triangle cut. WebGPU allows 16 varyings, which is
 // already full, so this stays in the vertex stage.
-fn terrainSunlight(heightMap: texture_2d<f32>, heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, direction: vec3<f32>, heightMeters: f32, sun: vec3<f32>, radius: f32, minHeight: f32, tiled: f32, coreSize: f32, gutter: f32, maxLevel: f32, maxHeight: f32, sampleSpacing: f32, cellRadians: f32, enabled: f32, steps: f32) -> f32 {
+fn terrainSunlight(heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, direction: vec3<f32>, heightMeters: f32, sun: vec3<f32>, radius: f32, minHeight: f32, coreSize: f32, gutter: f32, maxLevel: f32, maxHeight: f32, sampleSpacing: f32, cellRadians: f32, enabled: f32, steps: f32) -> f32 {
   let bodyVisibility = solarVisibility(direction,sun,radius,heightMeters,minHeight);
   // steps < 1 is the draw-time cache miss. A close drag would otherwise march
   // every vertex of every new patch; the compute bake fills those patches later.
@@ -39,7 +39,7 @@ fn terrainSunlight(heightMap: texture_2d<f32>, heightTiles: texture_2d_array<f32
     let rayHeight=heightMeters+r*change/(sqrt(max(0.000001,1.0+change))+1.0);
     if(rayHeight>maxHeight+bias && incidence>=0.0) { break; }
     let rayDirection=normalize(d+light*q);
-    let ground=shadowHeight(heightMap,heightTiles,indexMap,rayDirection,tiled,coreSize,gutter,maxLevel);
+    let ground=shadowHeight(heightTiles,indexMap,rayDirection,coreSize,gutter,maxLevel);
     let opening=max(length(cross(light,rayDirection)),0.1);
     let penumbraMeters=max(distance*0.014,meshFeather)/opening;
     let clearance=rayHeight-ground;

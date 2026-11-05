@@ -44,6 +44,7 @@ import {
   vec2,
 } from "three/tsl";
 import vertexShader from "./shaders/vertex.wgsl?raw";
+import ellipsoidOffsetShader from "./shaders/ellipsoid-offset.wgsl?raw";
 import tileToFaceUVShader from "./shaders/tile-to-face-uv.wgsl?raw";
 import directionShader from "./shaders/face-uv-to-direction.wgsl?raw";
 import positionToLatLonShader from "./shaders/position-to-lat-lon.wgsl?raw";
@@ -53,10 +54,14 @@ import fragmentShader from "./shaders/fragment.wgsl?raw";
 import transmittanceShader from "./shaders/atmosphere-transmittance.wgsl?raw";
 import oceanShader from "./shaders/ocean.wgsl?raw";
 import type { AtmosphereLight } from "../atmosphere/atmosphere.ts";
+import type { SurfaceOverlay, SurfacePoint } from "../overlay.ts";
 import { SKY_LIGHT_WIDTH } from "../atmosphere/model.ts";
 import surfaceDetailShader from "./shaders/surface-detail.wgsl?raw";
 import nightLightsShader from "./shaders/night-lights.wgsl?raw";
+import cloudCoverShader from "./shaders/cloud-cover.wgsl?raw";
+import cloudShadowShader from "./shaders/cloud-shadow.wgsl?raw";
 import { geographicToDirection } from "../geographic.ts";
+import { ellipsoidOffset } from "../ellipsoid.ts";
 import { assertTileInstances, type TileInstances } from "./tile-instances.ts";
 
 // One grid and material draw every selected tile as an instance. The CPU still
@@ -92,6 +97,8 @@ export interface TileLayerOptions {
   /** Equirectangular water fraction in red. Ownership transfers to the layer. */
   waterMask?: THREE.Texture;
   surfaceDetail?: boolean;
+  /** Polar flattening of the surface; 0 is a sphere. */
+  flattening?: number;
 }
 
 export function createTileLayer({
@@ -104,6 +111,7 @@ export function createTileLayer({
   nightLights,
   waterMask,
   surfaceDetail = false,
+  flattening = 0,
 }: TileLayerOptions) {
   assertTileInstances(instances);
   const capacity = instances.capacity;
@@ -256,7 +264,8 @@ export function createTileLayer({
     direction: localDirection,
     enabled: elevationEnabled,
   }) as THREE.Node<"float">;
-  material.positionNode = wgslFn(vertexShader)({
+  const cameraOffset = uniform(new THREE.Vector3());
+  material.positionNode = wgslFn(vertexShader, [include(wgslFn(ellipsoidOffsetShader))])({
     position: positionLocal,
     heightMeters,
     heightRange: heightRecord.z.mul(elevationEnabled),
@@ -266,9 +275,13 @@ export function createTileLayer({
     segments: segmentCount,
     tileAnchor: attribute("tileAnchor", "vec3"),
     tileCenter: attribute("tileCenter", "vec3"),
+    e2: float(flattening * (2 - flattening)),
+    cameraOffset,
   });
-  const latLon = wgslFn(positionToLatLonShader)({ position: cubeDirection }) as THREE.Node<"vec2">;
-  const overviewUV = wgslFn(latLonToUVShader)({
+  const positionToLatLon = wgslFn(positionToLatLonShader);
+  const latLonToUV = wgslFn(latLonToUVShader);
+  const latLon = positionToLatLon({ position: cubeDirection }) as THREE.Node<"vec2">;
+  const overviewUV = latLonToUV({
     latitude: latLon.x,
     longitude: latLon.y,
   }) as THREE.Node<"vec2">;
@@ -358,6 +371,12 @@ export function createTileLayer({
     include(wgslFn(oceanShader)),
   ]);
   const detailEnabled = uniform(surfaceDetail ? 1 : 0);
+  const nightLight = uniform(new THREE.Vector3());
+  const waterRoughness = uniform(ORBIT_WATER_ROUGHNESS);
+  const emptyClouds = onePixel(0);
+  const cloudNode = texture(emptyClouds);
+  const cloudHeight = uniform(0);
+  const cloudStrength = uniform(0);
   const texelsPerPixel = (sample: THREE.Node<"vec2">, width: number) =>
     surfaceDetail && width > 0
       ? max(dFdx(sample).length(), dFdy(sample).length()).mul(width)
@@ -380,7 +399,19 @@ export function createTileLayer({
     faceColor: varying(attribute("tileColor", "vec3")),
     normal: terrainNormal,
     sun,
-    sunlight,
+    sunlight: sunlight.mul(
+      wgslFn(cloudShadowShader, [
+        include(wgslFn(cloudCoverShader, [include(positionToLatLon), include(latLonToUV)])),
+      ])({
+        map: cloudNode,
+        mapSampler: sampler(cloudNode),
+        radial: cubeDirection,
+        sun,
+        radius,
+        height: cloudHeight,
+        strength: cloudStrength,
+      }) as THREE.Node<"float">,
+    ),
     // Surface-to-camera in the globe's own frame, where the sun and normals live.
     view: modelWorldMatrixInverse.mul(cameraWorldMatrix.mul(vec4(positionView.negate(), 0))).xyz,
     hapkeEnabled,
@@ -390,9 +421,7 @@ export function createTileLayer({
     shadingEnabled,
     radial: cubeDirection,
     radius,
-    pixelMeters: surfaceDetail
-      ? max(dFdx(cubeDirection).length(), dFdy(cubeDirection).length()).mul(radius)
-      : float(1),
+    pixelMeters: max(dFdx(cubeDirection).length(), dFdy(cubeDirection).length()).mul(radius),
     detailEnabled,
     // Sunlight filtered by the air between the ground and the sun, and blue sky light.
     sunColor: mix(
@@ -409,15 +438,14 @@ export function createTileLayer({
       ).mul(atmosphereIntensity),
       atmosphereEnabled,
     ),
-    skyLight: skyLightNode.rgb.mul(atmosphereIntensity).mul(atmosphereEnabled),
+    skyLight: skyLightNode.rgb.mul(atmosphereIntensity).add(nightLight).mul(atmosphereEnabled),
     water: waterMask
       ? texture(waterMask, overviewUV).grad(
           gradient({ gradient: dFdx(overviewUV) }),
           gradient({ gradient: dFdy(overviewUV) }),
         ).r
       : float(0),
-    // Unresolved waves at orbital scale.
-    waterRoughness: float(0.27),
+    waterRoughness,
     tileTexels: texelsPerPixel(imageUV, imageryWidth),
     parentTexels: texelsPerPixel(parentUV, imageryWidth),
     overviewTexels: texelsPerPixel(overviewUV, overviewWidth),
@@ -426,10 +454,15 @@ export function createTileLayer({
   const day = color;
   const nightEnabled = uniform(nightLights ? 1 : 0);
   const nightColor = nightLights
-    ? texture(nightLights, overviewUV).grad(
-        gradient({ gradient: dFdx(overviewUV) }),
-        gradient({ gradient: dFdy(overviewUV) }),
-      ).rgb
+    ? texture(nightLights, overviewUV)
+        .grad(gradient({ gradient: dFdx(overviewUV) }), gradient({ gradient: dFdy(overviewUV) }))
+        // A coarse mip is the warm glow of city light in the air around it.
+        .rgb.add(
+          // The floor skips the moonlit land in the photo, which would otherwise glow too.
+          max(texture(nightLights, overviewUV).level(float(5)).rgb.sub(0.14), 0).mul(
+            vec3(0.9, 0.65, 0.4),
+          ),
+        )
     : vec3(0);
   material.colorNode = nightLights
     ? (wgslFn(nightLightsShader)({
@@ -440,6 +473,17 @@ export function createTileLayer({
         enabled: nightEnabled,
       }) as THREE.Node<"vec3">)
     : day;
+  const surfaceColor = material.colorNode as THREE.Node<"vec3">;
+  const surfacePoint: SurfacePoint = {
+    uv: overviewUV,
+    uvDx: gradient({ gradient: dFdx(overviewUV) }) as THREE.Node<"vec2">,
+    uvDy: gradient({ gradient: dFdy(overviewUV) }) as THREE.Node<"vec2">,
+    latitude: latLon.x,
+    longitude: latLon.y,
+    normal: cubeDirection,
+    pixelMeters: fragmentInputs.pixelMeters,
+  };
+  let overlays: readonly SurfaceOverlay[] = [];
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = "Instanced globe tiles";
   mesh.visible = false;
@@ -459,7 +503,14 @@ export function createTileLayer({
     colors.array = next.colors;
     anchors.array = next.anchors;
     faceUVs.array = next.faceUVs;
-    mesh.position.fromArray(next.origin);
+    // The origin is the camera's sphere point; the camera is off it by the same offset.
+    ellipsoidOffset(
+      _normal.fromArray(next.origin).normalize(),
+      radiusMeters,
+      flattening,
+      cameraOffset.value,
+    );
+    mesh.position.fromArray(next.origin).add(cameraOffset.value);
     for (const buffer of [sizes, rotations, centers, colors, anchors, faceUVs]) {
       buffer.clearUpdateRanges();
       if (next.count > 0) {
@@ -485,6 +536,7 @@ export function createTileLayer({
     emptyArray.dispose();
     heightArray.dispose();
     emptyShadowIndex.dispose();
+    emptyClouds.dispose();
     transmittanceNode.value.dispose();
     skyLightNode.value.dispose();
     overviewTexture?.dispose();
@@ -622,6 +674,32 @@ export function createTileLayer({
       atmosphereBottom.value = atmosphere.bottom;
       atmosphereTop.value = atmosphere.top;
       atmosphereIntensity.value = atmosphere.intensity;
+      nightLight.value.fromArray(atmosphere.nightLight);
+    },
+    /** Waves too small to see from orbit read as roughness; closer in, they are drawn. */
+    setCameraAltitude(altitude: number) {
+      waterRoughness.value = THREE.MathUtils.lerp(
+        CLOSE_WATER_ROUGHNESS,
+        ORBIT_WATER_ROUGHNESS,
+        THREE.MathUtils.smoothstep(altitude, 5_000, 400_000),
+      );
+    },
+    /** Paint these over the surface, recompiling the material only if the list changed. */
+    setOverlays(next: readonly SurfaceOverlay[]) {
+      if (next.length === overlays.length && next.every((overlay, i) => overlay === overlays[i]))
+        return;
+      overlays = next;
+      material.colorNode = next.reduce(
+        (color, overlay) => overlay.over(color, surfacePoint),
+        surfaceColor,
+      );
+      material.needsUpdate = true;
+    },
+    /** Shade the ground under a cloud layer. The texture stays owned by the caller. */
+    setClouds(map: THREE.Texture | undefined, height: number, strength: number) {
+      cloudNode.value = map ?? emptyClouds;
+      cloudHeight.value = height;
+      cloudStrength.value = strength;
     },
     group,
     commit,
@@ -630,8 +708,14 @@ export function createTileLayer({
   };
 }
 
+const _normal = new THREE.Vector3();
+const ORBIT_WATER_ROUGHNESS = 0.31;
+const CLOSE_WATER_ROUGHNESS = 0.12;
+
 function onePixel(value: number) {
   const texture = new THREE.DataTexture(new Uint8Array([value, value, value, 255]), 1, 1);
+  // Nearest-filtered textures get no WGSL sampler, and the shader passes one.
+  texture.minFilter = texture.magFilter = THREE.LinearFilter;
   texture.needsUpdate = true;
   return texture;
 }

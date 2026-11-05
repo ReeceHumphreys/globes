@@ -55,6 +55,7 @@ npm run dev             # Viewer example, using the library source
 npm run build           # Package + declarations + demo
 npm run preview         # Production viewer build
 npm test
+npm run benchmark:render  # Real GPU frame times in headless Chrome
 ```
 
 Development needs Node 24 or newer.

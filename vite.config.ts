@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import { defineConfig, loadEnv, type ProxyOptions } from "vite";
 
-// Tile pyramids are served by the sibling tile-service. Night lights stay here.
+// Tile pyramids are served by the sibling tile-service. Night lights and clouds stay here.
 export default defineConfig(({ command, mode }) => {
   const tileTarget =
     loadEnv(mode, process.cwd(), "VITE_").VITE_TILE_BASE ?? "http://127.0.0.1:8787";
@@ -14,7 +14,7 @@ export default defineConfig(({ command, mode }) => {
     "/data/moon": tileProxy(),
     "/data/mars": tileProxy(),
     "/data/earth": tileProxy((req) =>
-      req.url?.startsWith("/data/earth/night-lights") ? req.url : undefined,
+      /^\/data\/earth\/(night-lights|clouds)\//.test(req.url ?? "") ? req.url : undefined,
     ),
   };
 

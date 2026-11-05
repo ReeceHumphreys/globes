@@ -2,6 +2,10 @@ import * as THREE from "three/webgpu";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import {
   Atmosphere,
+  Clouds,
+  GeoJsonOverlay,
+  Graticule,
+  createBloom,
   EARTH_AIR,
   MARS_AIR,
   GlobeControls,
@@ -32,9 +36,8 @@ if (!("gpu" in navigator)) {
   throw new Error(message);
 }
 const renderer = new THREE.WebGPURenderer({ antialias: true, reversedDepthBuffer: true });
-renderer.toneMapping = THREE.AgXToneMapping;
-renderer.toneMappingExposure = 2 ** 2;
-renderer.setPixelRatio(devicePixelRatio);
+// Full-screen shaders dominate near the surface; 2× Retina costs 1.8× the pixels of this.
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 await renderer.init();
 document.body.append(renderer.domElement);
@@ -86,9 +89,14 @@ async function show(id: BodyId) {
     waterMask?.dispose();
     return;
   }
+  // Earth's imagery is a bright, saturated photo: AgX and the Moon's exposure wash it out.
+  renderer.toneMapping = id === "earth" ? THREE.NeutralToneMapping : THREE.AgXToneMapping;
+  renderer.toneMappingExposure = 2 ** body.exposureStops;
+  panel.setExposure(body.exposureStops);
   const globe = new TiledGlobe({
     name: body.name,
     radius: body.radiusMeters,
+    flattening: "flattening" in body ? body.flattening : 0,
     sun,
     overview: body.overview,
     imagery: query.get("imagery") ?? dataset(body.imagery),
@@ -115,6 +123,24 @@ async function show(id: BodyId) {
   const extras: { update(): void; dispose(): void }[] = [];
   const places: Shown["places"] = [];
   const labelGroups: Shown["labelGroups"] = [];
+  const grid = new Graticule({
+    // The tropics and polar circles.
+    parallels: id === "earth" ? [23.44, -23.44, 66.56, -66.56] : [],
+  });
+  grid.visible = false;
+  globe.add(grid);
+  labelGroups.push({ name: "Lat/long grid", group: grid });
+  if ("coastline" in body) {
+    const coastline = new GeoJsonOverlay({ data: body.coastline, color: "#ffd54a" });
+    globe.add(coastline);
+    labelGroups.push({ name: "USA coastline", group: coastline });
+  }
+  if ("clouds" in body) {
+    const clouds = new Clouds({ map: new URL(body.clouds, base).href });
+    globe.add(clouds);
+    extras.push({ update() {}, dispose: () => clouds.dispose() });
+    labelGroups.push({ name: "Clouds", group: clouds });
+  }
   if (id === "moon") {
     // Rocks and Apollo landers ride the surface; place labels are grouped by country.
     const rocks = new SurfaceRocks(),
@@ -187,10 +213,11 @@ addEventListener("resize", () => {
 await show(bodyId(query.get("body")));
 document.getElementById("startup-status")?.remove();
 
+const pipeline = createBloom(renderer, scene, camera);
 renderer.setAnimationLoop(() => {
   if (!shown) return;
   shown.update();
-  renderer.render(scene, camera);
+  pipeline.render();
   labels.render(scene, camera);
   const { stats } = shown.globe;
   panel.setStats(

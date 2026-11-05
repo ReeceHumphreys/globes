@@ -7,6 +7,7 @@ import {
   orbitRotateSpeed,
   pickGlobe,
 } from "./orbit.ts";
+import { altitudeOf } from "./ellipsoid.ts";
 
 // Input owns the camera only. Selection and rendering remain demand-driven in the engine.
 export function createOrbitInput(
@@ -16,6 +17,7 @@ export function createOrbitInput(
   minAltitude: number,
   groundHeight: () => number,
   render: () => void,
+  flattening = 0,
 ) {
   let tilt = 0,
     heading = 0;
@@ -27,9 +29,18 @@ export function createOrbitInput(
   const oldTouchAction = canvas.style.touchAction;
   canvas.style.touchAction = "none";
   const height = () => Math.max(1, canvas.clientHeight);
-  const altitude = () => Math.max(minAltitude, camera.position.length() - radius - groundHeight());
+  const height3D = () => altitudeOf(camera.position, radius, flattening);
+  const altitude = () => Math.max(minAltitude, height3D() - groundHeight());
+  // Radial moves change height by the same amount, to within the flattening.
+  const setHeight = (meters: number) =>
+    camera.position.setLength(camera.position.length() + meters - height3D());
+  const keepClear = () => {
+    const lowest = groundHeight() + minAltitude;
+    if (height3D() < lowest) setHeight(lowest);
+  };
   function aim() {
-    tilt = THREE.MathUtils.clamp(tilt, 0, horizonTilt(camera.position.length(), radius));
+    const distance = camera.position.length();
+    tilt = THREE.MathUtils.clamp(tilt, 0, horizonTilt(distance, distance - height3D()));
     aimAtOrigin(camera, tilt, heading);
   }
   function pick(x: number, y: number, output: THREE.Vector3) {
@@ -41,6 +52,7 @@ export function createOrbitInput(
       1 - ((y - rect.top) / rect.height) * 2,
       radius + groundHeight(),
       output,
+      flattening,
     );
   }
   function beginAnchor(x: number, y: number) {
@@ -50,16 +62,11 @@ export function createOrbitInput(
   function zoomAt(factor: number, x: number, y: number) {
     aim();
     const hasAnchor = pick(x, y, anchor);
-    const ground = groundHeight();
-    camera.position.setLength(
-      radius + ground + THREE.MathUtils.clamp(altitude() * factor, minAltitude, radius * 9),
-    );
+    setHeight(groundHeight() + THREE.MathUtils.clamp(altitude() * factor, minAltitude, radius * 9));
     aim();
     if (hasAnchor && pick(x, y, hit)) anchorOrbit(camera, hit, anchor);
     // Terrain can be higher beneath the destination; never carry the old clearance there.
-    camera.position.setLength(
-      Math.max(camera.position.length(), radius + groundHeight() + minAltitude),
-    );
+    keepClear();
     render();
   }
   function pointerDown(event: PointerEvent) {
@@ -111,9 +118,7 @@ export function createOrbitInput(
         aim();
         anchored = pick(event.clientX, event.clientY, anchor);
       }
-      camera.position.setLength(
-        Math.max(camera.position.length(), radius + groundHeight() + minAltitude),
-      );
+      keepClear();
     }
     render();
   }

@@ -83,7 +83,9 @@ The shaded color stays scene-linear. The renderer applies the **Exposure**
 slider before AgX and then encodes sRGB. Default exposure is **+2 stops** (4×
 linear radiance), chosen for readability of the dark WAC morphology mosaic.
 This is a display preset, not calibrated solar irradiance or camera exposure.
-The slider spans −2 to +5 stops; 0 restores the previous 1× exposure. Exposure
+The slider spans −2 to +5 stops; 0 restores the previous 1× exposure. The viewer
+uses Neutral tone mapping at +0.5 stops for Earth instead, because AgX at the
+Moon's exposure washes out its bright, saturated imagery. Exposure
 does not add ambient light or change the Hapke phase curve. Fully blocked ground
 and the deep night side remain black.
 
@@ -130,3 +132,44 @@ off-screen or behind the Moon. No continuous animation is added.
 These checks validate shaders and numeric behavior; the browser scene still
 needs visual inspection on target devices. GPU timestamp queries in the local
 microbenchmark returned zero values, so no GPU-time/FPS claim is made.
+
+## Clouds
+
+`earth.add(new Clouds({ map }))` adds a thin layer 10 km up, on a globe that has an
+Atmosphere. The atmosphere shader meets it on each pixel's ray, so haze falls in
+front of and behind it, sunset colour comes from the same transmittance table, and
+night lights dim under it without extra code. `cloud-shadow.wgsl` shades the ground.
+`cloud-light.wgsl` gives it form: thin cloud is darker and clearer, cloud standing
+higher toward the sun shades its neighbours, and noise roughens the map's edges once
+the view passes its 5 km texels. Clouds also take sky light and `nightLight`.
+
+It is a flat layer for viewing from orbit. It fades in between 100 km and 300 km of
+camera altitude, so it never hides the ground during ascent or looks flat up close.
+The bundled map is one fixed set of clouds from 2001, not the weather on any date.
+It takes about 170 MB of GPU memory with mipmaps.
+
+## Atmosphere tables
+
+Each pixel used to march 16 steps through the air. Now a compute pass tabulates every
+ray from the camera (`atmosphere-view.wgsl`) and each pixel reads the table at its own
+depth (`atmosphere-sky.wgsl`). The tables depend only on camera height and the sun's
+angle to it, so they rebuild only when those change. Rows follow the angle from straight
+down, in separate bands for rays that reach the ground and rays that do not, so the
+limb stays sharp from orbit. Mie's sun halo is baked in at table resolution, so it is
+softer than a per-pixel phase function.
+
+Multiple scattering follows Hillaire (2020), in a small table built with the others.
+The ground albedo there is a dark 0.1: higher values wash out the imagery.
+`nightLight` and `airglow` in a preset add moonlit ground and the green line at the
+limb. Both are artistic, far brighter than life.
+
+## Ellipsoid
+
+`flattening` on a TiledGlobe makes the surface an ellipsoid. A terrain direction is the
+geodetic surface normal, so latitudes are geodetic and imagery, heights, normals and
+lighting need no change: only `vertex.wgsl` moves the point. Selection still runs on the
+sphere, with the camera at its height over the matching point. That is exact under the
+camera and drifts with distance, which the frustum slack and the lowered horizon sphere
+absorb. The atmosphere runs in a frame stretched along the poles, where the ellipsoid is
+a sphere and `r - bottom` is height. Terrain shadows still march on the sphere, a local
+error far below their resolution.

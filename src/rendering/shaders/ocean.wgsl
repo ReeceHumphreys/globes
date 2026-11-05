@@ -1,3 +1,22 @@
+// Water seen closely: a surface normal tilted by waves of a few sizes, each fading once it
+// is too small for the screen. Fixed in place; they do not move.
+fn waveNormal(radial: vec3<f32>, radius: f32, pixelMeters: f32) -> vec3<f32> {
+  let up = normalize(radial);
+  var slope = vec3<f32>(0.0);
+  for (var i = 0; i < 3; i++) {
+    let scale = 400.0 / pow(4.0, f32(i));
+    let weight = cover(scale, pixelMeters);
+    if (weight > 0.0) {
+      let p = up * (radius / scale);
+      let here = valueNoise(p);
+      slope += weight * vec3<f32>(valueNoise(p + vec3<f32>(0.5, 0.0, 0.0)) - here,
+        valueNoise(p + vec3<f32>(0.0, 0.5, 0.0)) - here,
+        valueNoise(p + vec3<f32>(0.0, 0.0, 0.5)) - here);
+    }
+  }
+  return normalize(up - 0.25 * (slope - up * dot(slope, up)));
+}
+
 // GGX microfacet reflection, separable Smith visibility and Schlick Fresnel.
 // Water IOR ~1.333 gives F0 ~0.0204. Roughness represents unresolved waves.
 fn oceanRadiance(color: vec3<f32>, normal: vec3<f32>, view: vec3<f32>,

@@ -43,7 +43,7 @@ fn fragmentColor(
   // Open water: a level surface with sun glint and reflected sky, scaled by π to the
   // terrain's convention (a white Lambert surface under the noon sun reads 1).
   if (shadingEnabled > 0.5 && imageryEnabled > 0.5 && neutralTerrain < 0.5 && water > 0.001) {
-    let sea = oceanRadiance(terrainResult, radial, view, sun, sunColor, skyLight,
+    let sea = oceanRadiance(terrainResult, waveNormal(radial, radius, pixelMeters), view, sun, sunColor, skyLight,
       skyLight / 3.14159265, sunlight, waterRoughness) * 3.14159265;
     lit = mix(lit, sea, water);
   }

@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "data:ocean-mask": "node scripts/ocean-mask.ts",
+    "data:usa-coastline": "node scripts/usa-coastline.ts",
     "dev": "vite",
     "build": "npm run typecheck && npm run build:lib && npm run build:example",
     "format": "prettier --write .",
@@ -13,7 +14,8 @@
     "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
     "build:example": "vite build",
     "prepack": "npm run build:lib",
-    "benchmark:terrain:prepare": "node scripts/prepare-terrain-benchmark.ts"
+    "benchmark:terrain:prepare": "node scripts/prepare-terrain-benchmark.ts",
+    "benchmark:render": "node scripts/benchmark-render.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

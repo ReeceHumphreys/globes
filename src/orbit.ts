@@ -7,6 +7,7 @@ import {
   Vector3,
   type PerspectiveCamera,
 } from "three/webgpu";
+import { ellipsoidDistance } from "./ellipsoid.ts";
 
 const _raycaster = new Raycaster();
 const _pointer = new Vector2();
@@ -24,13 +25,14 @@ export function lookAtLocal(camera: PerspectiveCamera, target: Vector3): void {
 }
 const _origin = new Vector3();
 
-/** Nearest visible sphere intersection, in the camera's parent frame; no terrain raycasting. */
+/** Nearest visible surface intersection, in the camera's parent frame; no terrain raycasting. */
 export function pickGlobe(
   camera: PerspectiveCamera,
   x: number,
   y: number,
   radius: number,
   target: Vector3,
+  flattening = 0,
 ): boolean {
   camera.updateMatrixWorld(true);
   _pointer.set(x, y);
@@ -39,7 +41,7 @@ export function pickGlobe(
     _raycaster.ray.applyMatrix4(_inverseParent.copy(camera.parent.matrixWorld).invert());
     _raycaster.ray.direction.normalize();
   }
-  const distance = sphereDistance(_raycaster.ray, radius);
+  const distance = ellipsoidDistance(_raycaster.ray, radius, flattening, sphereDistance);
   if (distance === undefined) return false;
   target
     .copy(_raycaster.ray.origin)

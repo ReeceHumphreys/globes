@@ -1,6 +1,5 @@
 import * as THREE from "three/webgpu";
 import { createOrbitInput } from "./controls.ts";
-import { geographicToDirection } from "./geographic.ts";
 import type { TiledGlobe } from "./tiled-globe.ts";
 
 interface GlobeControlsEventMap {
@@ -8,7 +7,8 @@ interface GlobeControlsEventMap {
   change: object;
 }
 
-const _direction = new THREE.Vector3();
+const _direction = new THREE.Vector3(),
+  _normal = new THREE.Vector3();
 
 /**
  * Orbit, zoom and look around a globe, staying above its terrain.
@@ -50,17 +50,18 @@ export class GlobeControls extends THREE.EventDispatcher<GlobeControlsEventMap> 
       minAltitude,
       () => this.#groundHeight(),
       () => this.dispatchEvent({ type: "change" }),
+      globe.flattening,
     );
   }
 
   /** Altitude above the displayed terrain. */
   get altitude(): number {
-    return this.camera.position.length() - this.globe.radius - this.#groundHeight();
+    return this.globe.altitudeOf(this.camera.position) - this.#groundHeight();
   }
   set altitude(meters: number) {
     if (!Number.isFinite(meters) || meters < this.minAltitude)
       throw new RangeError("Invalid altitude");
-    this.camera.position.setLength(this.globe.radius + this.#groundHeight() + meters);
+    this.camera.position.setLength(this.camera.position.length() + meters - this.altitude);
     this.dispatchEvent({ type: "change" });
   }
 
@@ -75,8 +76,7 @@ export class GlobeControls extends THREE.EventDispatcher<GlobeControlsEventMap> 
       altitude < this.minAltitude
     )
       throw new RangeError("Invalid location");
-    geographicToDirection(latitudeDeg, longitudeDeg, this.camera.position);
-    this.camera.position.multiplyScalar(this.globe.radius + this.#groundHeight() + altitude);
+    this.globe.positionAt(latitudeDeg, longitudeDeg, altitude, this.camera.position);
     this.#input.reset();
     this.dispatchEvent({ type: "change" });
   }
@@ -91,9 +91,10 @@ export class GlobeControls extends THREE.EventDispatcher<GlobeControlsEventMap> 
     _direction.copy(camera.position).normalize();
     if (this.#ground?.direction.equals(_direction) && this.#ground.height !== ground)
       camera.position.setLength(camera.position.length() + ground - this.#ground.height);
-    camera.position.setLength(Math.max(camera.position.length(), radius + ground + minAltitude));
+    if (this.altitude < minAltitude)
+      camera.position.setLength(camera.position.length() + minAltitude - this.altitude);
     this.#input.aim();
-    const altitude = camera.position.length() - radius - ground;
+    const altitude = this.altitude;
     camera.near = Math.max(0.1, Math.min(radius * 0.01, altitude * 0.02));
     // Only grow far: the scene may hold more than this globe.
     camera.far = Math.max(camera.far, camera.position.length() + radius * 2);
@@ -109,6 +110,6 @@ export class GlobeControls extends THREE.EventDispatcher<GlobeControlsEventMap> 
   }
 
   #groundHeight(): number {
-    return this.globe.heightAt(this.camera.position);
+    return this.globe.heightAt(this.globe.normalAt(this.camera.position, _normal));
   }
 }

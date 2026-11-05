@@ -30,14 +30,16 @@ const code = entry.code.replace(
   /from (["'])(three(?:\/[^"']*)?)\1/g,
   (_, quote, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`,
 );
-const { TiledGlobe, Atmosphere, EARTH_AIR } = await import(
+const { TiledGlobe, Atmosphere, EARTH_AIR, Graticule, ImageOverlay, GeoJsonOverlay } = await import(
   `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
 );
 
 const radius = 1737400;
 const renderer = {
+  compute() {},
   reversedDepthBuffer: true,
   getDrawingBufferSize: (out: Vector2) => out.set(800, 600),
+  getPixelRatio: () => 1,
 };
 function camera(distance: number) {
   const c = new PerspectiveCamera(75, 4 / 3, 100, radius * 20);
@@ -171,6 +173,73 @@ test("an Atmosphere child is found by the globe and sized from its radius", asyn
   assert.equal(air.parent, null);
   globe.update(camera(6_378_137 * 3), renderer); // and the globe copes with its removal
   globe.dispose();
+});
+
+test("overlays recompile the terrain only when the list changes, and toggling is free", async () => {
+  const globe = new TiledGlobe({ radius, overview: overview() });
+  const grid = new Graticule({ opacity: 0.4 });
+  globe.add(grid);
+  await globe.ready;
+  const view = camera(radius * 3);
+  globe.update(view, renderer);
+  const material = globe.children.find((c) => c.name === "Globe terrain")!.children[0].material;
+  assert.equal(grid.strength.value, 0.4);
+  const painted = material.colorNode;
+  const version = material.version;
+
+  grid.visible = false;
+  globe.update(view, renderer);
+  assert.equal(grid.strength.value, 0);
+  assert.equal(material.colorNode, painted);
+  assert.equal(material.version, version);
+
+  const bare = new Graticule();
+  globe.add(bare);
+  globe.update(view, renderer);
+  assert.notEqual(material.colorNode, painted);
+  grid.dispose();
+  bare.dispose();
+  globe.update(view, renderer);
+  assert.notEqual(material.colorNode, painted, "back to the plain surface");
+  globe.dispose();
+});
+
+test("GeoJSON lines are built on the globe's surface and cleaned up with the overlay", async () => {
+  const globe = new TiledGlobe({ radius, overview: overview() });
+  const overlay = new GeoJsonOverlay({
+    data: {
+      type: "LineString",
+      coordinates: [
+        [0, 0],
+        [5, 0],
+      ],
+    },
+  });
+  globe.add(overlay);
+  await globe.ready;
+  globe.update(camera(radius * 3), renderer);
+  const lines = overlay.children.find((c: { name: string }) => c.name === "GeoJSON lines");
+  assert.equal(lines.geometry.instanceCount, 5);
+  overlay.dispose();
+  assert.equal(overlay.parent, null);
+  globe.update(camera(radius * 3), renderer);
+  globe.dispose();
+});
+
+test("graticule options are checked and an image overlay frees its texture", () => {
+  assert.throws(() => new Graticule({ spacing: 7 }), RangeError);
+  assert.throws(() => new Graticule({ spacing: 0 }), RangeError);
+  assert.doesNotThrow(() => new Graticule({ spacing: 15 }));
+  assert.throws(() => new Graticule({ parallels: [91] }), RangeError);
+  assert.throws(() => new Graticule({ parallels: [1, 2, 3, 4, 5] }), RangeError);
+  let disposed = 0;
+  const map = new DataTexture(new Uint8Array(4), 1, 1);
+  map.addEventListener("dispose", () => disposed++);
+  const overlay = new ImageOverlay({ map });
+  assert.equal(overlay.map, map);
+  assert.equal(map.flipY, false, "north is the top row");
+  overlay.dispose();
+  assert.equal(disposed, 1);
 });
 
 test("a failed overview still builds the surface and reports the error", async () => {

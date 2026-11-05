@@ -10,7 +10,7 @@ import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
  */
 export class GlobeLabel extends CSS2DObject {
   readonly isGlobeLabel = true;
-  /** Planetocentric latitude, degrees. */
+  /** Latitude in degrees, geodetic on a flattened globe. */
   latitude: number;
   /** East-positive longitude, degrees. */
   longitude: number;

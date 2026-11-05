@@ -1,6 +1,6 @@
 import { MathUtils, Vector3 } from "three/webgpu";
 
-/** Unit direction of a geographic position: planetocentric, east-positive degrees. */
+/** Unit direction of a geographic position, in east-positive degrees. */
 export function geographicToDirection(
   latitudeDeg: number,
   longitudeDeg: number,

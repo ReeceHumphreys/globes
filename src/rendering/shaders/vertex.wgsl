@@ -8,7 +8,9 @@ fn vertexPosition(
   segments: f32,
   heightMeters: f32,
   heightRange: f32,
-  tileCenter: vec3<f32>
+  tileCenter: vec3<f32>,
+  e2: f32,
+  cameraOffset: vec3<f32>
 ) -> vec3<f32> {
   // 1. Scale the shared 1x1 grid to this tile's width and height.
   let scaled = vec3<f32>(position.xy * tileSize, 0.0);
@@ -41,5 +43,7 @@ fn vertexPosition(
   let direction = normalize(q + rotated);
   // Short inward walls cover gaps between coarse and fine edge polylines.
   let skirtDepth = heightRange + max(0.02, 4.0 * tileSize.x * tileSize.x / (radius * segments * segments));
-  return tileAnchor + delta + direction * (heightMeters - position.z * skirtDepth);
+  // The anchor is relative to the camera's sphere point, so the shape enters as a difference.
+  let shape = ellipsoidOffset(direction, radius, e2) - cameraOffset;
+  return tileAnchor + delta + shape + direction * (heightMeters - position.z * skirtDepth);
 }

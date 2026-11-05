@@ -120,6 +120,9 @@ export function createPanel(options: PanelOptions) {
         }),
       );
     },
+    setExposure(stops: number) {
+      $<HTMLInputElement>("[data-exposure]").value = String(stops);
+    },
     setNotice(text: string) {
       $("[data-notice]").textContent = text;
     },

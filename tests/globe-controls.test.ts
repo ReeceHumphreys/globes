@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Object3D, PerspectiveCamera, Scene, Vector3 } from "three/webgpu";
+import { geographicToDirection } from "../src/geographic.ts";
 import { GlobeControls } from "../src/globe-controls.ts";
 
 class Canvas extends EventTarget {
@@ -18,7 +19,15 @@ const radius = 1737400;
 function globe(height = () => 0) {
   return Object.assign(new Object3D(), {
     radius,
+    flattening: 0,
     heightAt: (_direction: Vector3) => height(),
+    normalAt: (point: Vector3, target = new Vector3()) => target.copy(point).normalize(),
+    altitudeOf: (point: Vector3) => point.length() - radius,
+    positionAt(latitudeDeg: number, longitudeDeg: number, altitude = 0, target = new Vector3()) {
+      return geographicToDirection(latitudeDeg, longitudeDeg, target).multiplyScalar(
+        radius + height() + altitude,
+      );
+    },
   });
 }
 type Globe = ConstructorParameters<typeof GlobeControls>[2];

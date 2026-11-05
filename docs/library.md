@@ -10,7 +10,7 @@ bundle; use one installation.
 ```ts
 const moon = new TiledGlobe({
   name: "Moon", // optional; manifests for another body are then rejected
-  radius: 1_737_400,
+  radius: 1_737_400, // equatorial
   overview: "/moon-2k.jpg", // equirectangular sRGB image, or a Texture (ownership transfers)
   imagery: "/data/moon/wac/manifest.json",
   regions: "/data/moon/apollo/catalog.json", // sparse high-resolution imagery
@@ -47,9 +47,16 @@ needs another frame, and when a setting changes.
 | `hapke`          | Lunar-style Hapke reflectance instead of Lambert                |
 | `wireframe`      | Draw the tile grid                                              |
 
-**Queries.** `heightAt(direction)` returns the displayed terrain height above
-the sphere along a local direction. `positionAt(lat, lon, altitude)` returns a
-local point on the terrain. `raycast` intersects the displayed surface, so
+**Shape.** A globe is a sphere unless `flattening` is set, such as
+`1 / 298.257223563` for WGS84 Earth. Latitudes are then geodetic and altitudes
+are above the ellipsoid, so a point's direction from the center is no longer its
+surface normal: use `normalAt` rather than normalizing a position.
+
+**Queries.** `heightAt(normal)` returns the displayed terrain height above the
+reference surface at a surface normal. `normalAt(point)` gives the normal beneath
+a local point and `altitudeOf(point)` its height above the reference surface,
+ignoring terrain. `positionAt(lat, lon, altitude)` returns a local point on the
+terrain. `raycast` intersects the displayed surface, so
 `raycaster.intersectObject(globe)` works.
 
 **Errors.** Failed downloads are non-fatal. They are dispatched as `error`
@@ -60,6 +67,52 @@ imagery/elevation status, much like `renderer.info`.
 
 `dispose()` cancels downloads, releases GPU resources and removes the globe and
 its labels.
+
+## Atmosphere and clouds
+
+```ts
+earth.add(new Atmosphere(EARTH_AIR));
+earth.add(new Clouds({ map: "/clouds.jpg" }));
+```
+
+Both are children of the globe, and `globe.update` drives them. `Clouds` is drawn
+by the `Atmosphere`, so it needs one. It fades out below `fadeAltitudes` so it never
+blocks an ascent. Call `dispose()` on each when finished.
+
+## Overlays
+
+```ts
+earth.add(new Graticule({ parallels: [23.44, -23.44] }));
+earth.add(new ImageOverlay({ map: "/coverage.png", opacity: 0.7 }));
+earth.add(new SurfaceOverlay(({ uv, uvDx, uvDy }) => texture(map, uv).grad(uvDx, uvDy)));
+```
+
+Overlays are children of the globe and paint its surface, so they follow the terrain
+at every zoom. `Graticule` picks its spacing from the camera's altitude unless given
+`spacing`. `ImageOverlay` takes a north-up equirectangular image with alpha, or a
+Texture: draw on a `CanvasTexture` and set `needsUpdate` for live data.
+`SurfaceOverlay` takes a function that returns a TSL vec4 for a `SurfacePoint`.
+
+`GeoJsonOverlay` takes a GeoJSON object or URL. Lines and polygon outlines are real
+lines: sharp and a constant width on screen. They ignore terrain
+height, so they drift from the ground in steep terrain seen up close. Polygon fills
+are painted on the surface at 10 km per pixel on Earth. Points are `GlobeLabel`s, so
+they need a CSS2DRenderer. One overlay has one style.
+
+```ts
+earth.add(new GeoJsonOverlay({ data: "/borders.geojson", color: "#fff", fill: "#f60" }));
+```
+
+Overlays are unlit, and they all lie under clouds and haze: hide `Clouds` when a map matters.
+Adding or removing an overlay recompiles the terrain, so add them once, then toggle
+`visible` or `opacity`.
+
+## Bloom
+
+```ts
+const pipeline = createBloom(renderer, scene, camera);
+pipeline.render(); // in place of renderer.render(scene, camera)
+```
 
 ## GlobeControls
 
@@ -99,9 +152,9 @@ materials are reused. Selection runs on the CPU; each height tile's manifest
 range supplies its conservative elevation bounds. Lighting defaults to Lambert; the Moon example opts into its lunar-style
 Hapke visualization preset. It is not a scientifically fitted Mars/Earth BRDF.
 
-Only spherical bodies and the normalized-cube tile format are supported. This
-is not an ellipsoid-aware GIS engine. Elevation heights must already be relative
-to that sphere, rather than an unconverted geoid/areoid/ellipsoid datum. Version 1
+Only spheres, flattened spheres and the normalized-cube tile format are supported.
+This is not a GIS engine. Elevation heights are read as relative to the globe's
+reference surface, with no geoid or areoid conversion. Version 1
 elevation is fixed at 0.5 m units with −10000 m offset, allowing −10000 through
 +22767.5 m. Some Earth bathymetry falls outside this range; the Earth relief command clamps those samples, and the shared encoder still rejects them. NoData fill, vertical
 units, reprojection, and photometric correction require explicit preprocessing.

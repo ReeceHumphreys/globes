@@ -10,6 +10,7 @@ import { createTileLayer, type SurfaceLayer } from "./rendering/tile-layer.ts";
 export type { SurfaceLayer };
 import { geographicToDirection } from "./geographic.ts";
 import { sphereDistance } from "./orbit.ts";
+import { altitudeOf, ellipsoidDistance, ellipsoidOffset, toSphere } from "./ellipsoid.ts";
 import { loadImageryManifest } from "./imagery/manifest.ts";
 import { createImageryCache } from "./imagery/tile-cache.ts";
 import { loadRegionalCatalog } from "./imagery/regions.ts";
@@ -17,10 +18,17 @@ import { loadHeightTiles } from "./elevation/tiles.ts";
 import { createHeightTileCache, type HeightTileCache } from "./elevation/tile-cache.ts";
 import type { GlobeLabel } from "./globe-label.ts";
 import type { Atmosphere, AtmosphereLight } from "./atmosphere/atmosphere.ts";
+import type { Clouds } from "./atmosphere/clouds.ts";
+import type { SurfaceOverlay } from "./overlay.ts";
 
 export interface TiledGlobeOptions {
-  /** Sphere radius in meters (the globe's local units). */
+  /** Equatorial radius in meters (the globe's local units). */
   radius: number;
+  /**
+   * Polar flattening, such as 1 / 298.257223563 for WGS84 Earth. Latitudes are then
+   * geodetic and altitudes are above the ellipsoid. Defaults to a sphere.
+   */
+  flattening?: number;
   /** Body name. When set, manifests published for another body are rejected. */
   name?: string;
   /** Equirectangular sRGB overview. A supplied texture transfers ownership. */
@@ -77,6 +85,8 @@ export interface TiledGlobeEventMap extends THREE.Object3DEventMap {
 }
 
 const _cameraPosition = new THREE.Vector3(),
+  _sphereCamera = new THREE.Vector3(),
+  _normal = new THREE.Vector3(),
   _cameraQuaternion = new THREE.Quaternion(),
   _globeQuaternion = new THREE.Quaternion(),
   _bufferSize = new THREE.Vector2(),
@@ -98,6 +108,7 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
   readonly isTiledGlobe = true;
   override readonly type = "TiledGlobe";
   readonly radius: number;
+  readonly flattening: number;
   /** Light whose direction shades the terrain. */
   sun: THREE.DirectionalLight | THREE.PointLight | null;
   readonly stats: TiledGlobeStats;
@@ -109,7 +120,10 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     super();
     if (!Number.isFinite(options.radius) || options.radius <= 0)
       throw new RangeError("A globe requires a positive radius.");
+    if (!(options.flattening === undefined || (options.flattening >= 0 && options.flattening < 1)))
+      throw new RangeError("Flattening must be from 0 to below 1.");
     this.radius = options.radius;
+    this.flattening = options.flattening ?? 0;
     this.name = options.name ?? "";
     this.sun = options.sun ?? null;
     this.#terrain = createTerrain(this, options);
@@ -172,7 +186,7 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     this.#terrain.update(camera, renderer, height, performance.now());
   }
 
-  /** Displayed terrain height, in meters above the sphere, along a local direction. */
+  /** Displayed terrain height, in meters above the ellipsoid, at a surface normal. */
   heightAt(direction: THREE.Vector3): number {
     return this.#terrain.heightAt(direction.x, direction.y, direction.z);
   }
@@ -184,8 +198,21 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     altitude = 0,
     target = new THREE.Vector3(),
   ) {
-    geographicToDirection(latitudeDeg, longitudeDeg, target);
-    return target.multiplyScalar(this.radius + this.heightAt(target) + altitude);
+    geographicToDirection(latitudeDeg, longitudeDeg, _normal);
+    return ellipsoidOffset(_normal, this.radius, this.flattening, target).addScaledVector(
+      _normal,
+      this.radius + this.heightAt(_normal) + altitude,
+    );
+  }
+
+  /** Surface normal beneath a point in the globe's local frame. */
+  normalAt(point: THREE.Vector3, target = new THREE.Vector3()): THREE.Vector3 {
+    return toSphere(point, this.radius, this.flattening, target).normalize();
+  }
+
+  /** Height of a local point above the ellipsoid, ignoring terrain. */
+  altitudeOf(point: THREE.Vector3): number {
+    return altitudeOf(point, this.radius, this.flattening);
   }
 
   /** Intersects the displayed surface. Children are not tested. */
@@ -197,9 +224,9 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     let distance: number | undefined,
       height = 0;
     for (let i = 0; i < 4; i++) {
-      distance = sphereDistance(_ray, this.radius + height);
+      distance = ellipsoidDistance(_ray, this.radius + height, this.flattening, sphereDistance);
       if (distance === undefined) return;
-      height = this.heightAt(_ray.at(distance, _point));
+      height = this.heightAt(this.normalAt(_ray.at(distance, _point), _normal));
     }
     _ray.at(distance!, _point).applyMatrix4(this.matrixWorld);
     const world = raycaster.ray.origin.distanceTo(_point);
@@ -244,6 +271,7 @@ type Settings = {
 
 function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
   const radius = globe.radius;
+  const flattening = globe.flattening;
   const body = options.name ? { name: options.name, radiusMeters: radius } : undefined;
   const controller = new AbortController(),
     signal = controller.signal;
@@ -304,16 +332,23 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       relativeCamera.matrixWorldInverse,
     );
     frustum.setFromProjectionMatrix(projectionView, THREE.WebGPUCoordinateSystem, reversedDepth);
+    // Selection sees the sphere, with the camera at its height over the matching point.
+    // That is exact beneath the camera and drifts with distance, by less than this.
+    toSphere(_cameraPosition, radius, flattening, _sphereCamera);
+    const planeSlack = Math.min(
+      radius * flattening,
+      Math.max(0, _sphereCamera.length() - radius) * 0.02,
+    );
     for (let i = 0; i < 6; i++) {
       const plane = frustum.planes[i];
       view.set(
-        [plane.normal.x, plane.normal.y, plane.normal.z, plane.constant],
+        [plane.normal.x, plane.normal.y, plane.normal.z, plane.constant + planeSlack],
         VIEW.Planes + i * 4,
       );
     }
-    view[VIEW.CameraX] = _cameraPosition.x;
-    view[VIEW.CameraY] = _cameraPosition.y;
-    view[VIEW.CameraZ] = _cameraPosition.z;
+    view[VIEW.CameraX] = _sphereCamera.x;
+    view[VIEW.CameraY] = _sphereCamera.y;
+    view[VIEW.CameraZ] = _sphereCamera.z;
     view[VIEW.ProjectionScale] = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
   }
 
@@ -349,7 +384,9 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     elevationEnabled && heightTiles ? heightTiles.sampleDirection(x, y, z) : 0;
   function updateElevationBounds() {
     const field = heightTiles?.manifest;
-    view[VIEW.MinElevation] = elevationEnabled && field ? Math.min(0, field.minMeters) : 0;
+    // The horizon test needs a sphere inside the surface, so it allows for the flattening.
+    view[VIEW.MinElevation] =
+      (elevationEnabled && field ? Math.min(0, field.minMeters) : 0) - radius * flattening;
     view[VIEW.MaxElevation] = elevationEnabled && field ? Math.max(0, field.maxMeters) : 0;
   }
 
@@ -417,6 +454,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       nightLights,
       waterMask,
       surfaceDetail: options.surfaceDetail,
+      flattening,
     });
     // Picking goes through the globe's own raycast, not the instanced grid.
     terrain.group.traverse((object) => (object.raycast = () => {}));
@@ -507,6 +545,29 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     globe.sunDirection(sun);
     terrain.setSun(sun.x, sun.y, sun.z);
     updateView(camera, renderer.reversedDepthBuffer === true || camera.reversedDepth, bufferHeight);
+    atmosphere?.update(renderer, camera);
+    // The Atmosphere draws the layer, so without one there is nothing to cast its shadow.
+    const clouds = atmosphere
+      ? globe.children.find(
+          (child): child is Clouds => (child as Partial<Clouds>).isClouds === true,
+        )
+      : undefined;
+    const altitude = globe.altitudeOf(_cameraPosition);
+    terrain.setCameraAltitude(altitude);
+    const overlays = globe.children.filter(
+      (child): child is SurfaceOverlay =>
+        (child as Partial<SurfaceOverlay>).isSurfaceOverlay === true,
+    );
+    terrain.setOverlays(overlays);
+    const overlayView = {
+      altitude: Math.max(altitude, 0),
+      radius,
+      flattening,
+      pixelRatio: renderer.getPixelRatio(),
+      camera: _cameraPosition,
+    };
+    for (const overlay of overlays) overlay.update(overlayView);
+    terrain.setClouds(clouds?.map, clouds?.altitude ?? 0, clouds?.strengthAt(altitude) ?? 0);
     const started = performance.now();
     const viewChanged =
       previousInstances?.buffer.byteLength === 0 ||

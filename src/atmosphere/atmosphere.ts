@@ -28,6 +28,8 @@ import cloudLightShader from "../rendering/shaders/cloud-light.wgsl?raw";
 import latLonToUVShader from "../rendering/shaders/lat-lon-to-uv.wgsl?raw";
 import positionToLatLonShader from "../rendering/shaders/position-to-lat-lon.wgsl?raw";
 import surfaceDetailShader from "../rendering/shaders/surface-detail.wgsl?raw";
+import skyLightUShader from "../rendering/shaders/sky-light-u.wgsl?raw";
+import { onePixel } from "../rendering/one-pixel.ts";
 import {
   EARTH_AIR,
   MULTIPLE_SCATTERING_SIZE,
@@ -41,7 +43,10 @@ import {
 } from "./model.ts";
 import type { Clouds } from "./clouds.ts";
 
-/** What a TiledGlobe needs to light its terrain through this atmosphere. @internal */
+/**
+ * This frame's light, resolved once for the sky and the terrain under it. The textures
+ * stay owned by the Atmosphere, and the cloud map by its Clouds. @internal
+ */
 export interface AtmosphereLight {
   readonly transmittance: THREE.Texture;
   readonly skyLight: THREE.Texture;
@@ -49,6 +54,16 @@ export interface AtmosphereLight {
   readonly top: number;
   readonly intensity: number;
   readonly nightLight: RGB;
+  cloudMap?: THREE.Texture;
+  cloudAltitude: number;
+  cloudStrength: number;
+}
+
+/** What the globe already knows about this frame. @internal */
+export interface AtmosphereView {
+  reversedDepth: boolean;
+  /** Drawing buffer height in pixels. */
+  bufferHeight: number;
 }
 
 /** The globe an atmosphere belongs to: its parent. */
@@ -98,10 +113,10 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
     pixelAngle: uniform(0),
     cloudTexels: uniform(1),
   };
-  readonly #lut = texture(placeholder());
-  readonly #multiple = texture(placeholder());
-  readonly #skyLight = texture(placeholder());
-  readonly #clouds = texture(placeholder());
+  readonly #lut = texture(onePixel(255));
+  readonly #multiple = texture(onePixel(255));
+  readonly #skyLight = texture(onePixel(255));
+  readonly #clouds = texture(onePixel(255));
   readonly #gathered = viewTable("Atmosphere gathered light");
   readonly #passed = viewTable("Atmosphere transmittance");
   // Must match the source: a render pass with reversed depth uses 32-bit float.
@@ -179,6 +194,7 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
         include(cloudCoverShader, include(positionToLatLonShader), include(latLonToUVShader)),
         include(surfaceDetailShader),
       ),
+      include(skyLightUShader),
     ]);
     const gathered = texture3D(this.#gathered);
     const color = sky({
@@ -230,8 +246,8 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
     };
   }
 
-  /** Tables for a globe of this radius, built on first use. @internal */
-  lightFor(radius: number): AtmosphereLight {
+  // Tables for a globe of this radius, built on first use.
+  #lightFor(radius: number): AtmosphereLight {
     if (this.#model?.bottom !== radius) {
       this.#light?.transmittance.dispose();
       this.#light?.skyLight.dispose();
@@ -248,6 +264,8 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
         top: model.top,
         intensity: this.preset.intensity,
         nightLight: this.preset.nightLight ?? [0, 0, 0],
+        cloudAltitude: 0,
+        cloudStrength: 0,
       };
       this.#lut.value = this.#light.transmittance;
       this.#skyLight.value = this.#light.skyLight;
@@ -273,15 +291,18 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
     this.removeFromParent();
   }
 
-  /** Follow the camera and sun. The globe calls this each frame. @internal */
-  update(renderer: THREE.WebGPURenderer, camera: THREE.Camera): void {
-    const globe = this.parent as AtmosphereParent | null;
-    if (!globe || !(globe.radius > 0)) return;
-    const light = this.lightFor(globe.radius);
+  /** Follow the camera and sun, and resolve this frame's light. The globe calls this. @internal */
+  update(
+    renderer: THREE.WebGPURenderer,
+    camera: THREE.Camera,
+    { reversedDepth, bufferHeight }: AtmosphereView,
+  ): AtmosphereLight {
+    const globe = this.parent as AtmosphereParent;
+    const light = this.#lightFor(globe.radius);
     const u = this.#uniforms;
     u.bottom.value = light.bottom;
     u.top.value = light.top;
-    u.reversedDepth.value = renderer.reversedDepthBuffer ? 1 : 0;
+    u.reversedDepth.value = reversedDepth ? 1 : 0;
     // Rays run in the body frame, stretched along the poles until the ellipsoid is a
     // sphere: the air's shape then needs no special case. Formed in float64 here.
     const polarRatio = (u.polarRatio.value = 1 - globe.flattening);
@@ -292,34 +313,41 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
     const altitude = globe.altitudeOf(_camera);
     u.camera.value.copy(_camera).setY(_camera.y / polarRatio);
     globe.sunDirection(u.sun.value);
-    this.#syncClouds(globe, renderer, camera, altitude);
+    this.#syncClouds(globe, light, camera, bufferHeight, altitude);
 
     // The tables depend only on the camera's height and the sun's angle to it.
     const r = Math.max(u.camera.value.length(), light.bottom + 1);
     const muSun = u.sun.value.dot(u.camera.value) / u.camera.value.length();
     const key = `${r.toFixed(0)} ${muSun.toFixed(4)}`;
-    if (key === this.#tabulated) return;
-    this.#tabulated = key;
-    u.tableRadius.value = r;
-    u.tableSun.value = muSun;
-    renderer.compute(this.#tabulate);
+    if (key !== this.#tabulated) {
+      this.#tabulated = key;
+      u.tableRadius.value = r;
+      u.tableSun.value = muSun;
+      renderer.compute(this.#tabulate);
+    }
+    return light;
   }
 
   #syncClouds(
     globe: AtmosphereParent,
-    renderer: THREE.WebGPURenderer,
+    light: AtmosphereLight,
     camera: THREE.Camera,
+    bufferHeight: number,
     altitude: number,
   ) {
     const u = this.#uniforms;
     const clouds = globe.children.find(
       (child): child is Clouds => (child as Partial<Clouds>).isClouds === true,
     );
-    u.cloudStrength.value = clouds?.strengthAt(altitude) ?? 0;
+    // Until its image loads, a layer has nothing to draw or to shade the ground with.
+    light.cloudMap = clouds?.map;
+    light.cloudAltitude = clouds?.altitude ?? 0;
+    light.cloudStrength = clouds?.map ? clouds.strengthAt(altitude) : 0;
+    u.cloudStrength.value = light.cloudStrength;
     if (!clouds?.map) return;
     this.#clouds.value = clouds.map;
     u.cloudRadius.value = globe.radius + clouds.altitude;
-    u.pixelAngle.value = 2 / (camera.projectionMatrix.elements[5] * renderer.domElement.height);
+    u.pixelAngle.value = 2 / (camera.projectionMatrix.elements[5] * bufferHeight);
     u.cloudTexels.value =
       (2 * Math.PI * u.cloudRadius.value) / (clouds.map.image as ImageBitmap).width;
   }
@@ -333,14 +361,6 @@ function viewTable(name: string) {
   table.colorSpace = THREE.NoColorSpace;
   table.generateMipmaps = false;
   return table;
-}
-
-function placeholder() {
-  const texture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
-  // Nearest-filtered textures get no WGSL sampler, and the shader passes one.
-  texture.minFilter = texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
-  return texture;
 }
 
 function halfFloatTexture(data: Float32Array, width: number, height: number) {

@@ -8,9 +8,12 @@ fn cloudLight(
   var density = cloudCover(map, mapSampler, normal, lod);
   if (density <= 0.0) { return vec4<f32>(0.0); }
   // The map runs out of detail from low orbit: ragged edges past its 5 km texels.
-  let fine = vec2<f32>(cover(30000.0, pixelMeters), cover(9000.0, pixelMeters));
+  let fine = vec4<f32>(cover(30000.0, pixelMeters), cover(9000.0, pixelMeters),
+    cover(3000.0, pixelMeters), cover(1000.0, pixelMeters));
   let noise = (valueNoise(normal * (radius / 30000.0)) - 0.5) * fine.x
-    + (valueNoise(normal * (radius / 9000.0)) - 0.5) * fine.y * 0.6;
+    + (valueNoise(normal * (radius / 9000.0)) - 0.5) * fine.y * 0.6
+    + (valueNoise(normal * (radius / 3000.0)) - 0.5) * fine.z * 0.36
+    + (valueNoise(normal * (radius / 1000.0)) - 0.5) * fine.w * 0.22;
   density = clamp(density + noise * 1.6 * density * (1.0 - density), 0.0, 1.0);
   // Cloud that stands higher toward the sun shades this point: a thin layer's only relief.
   var shade = 1.0;

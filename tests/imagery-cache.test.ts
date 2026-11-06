@@ -235,7 +235,7 @@ test("parent-to-child fades advance smoothly and stop requesting animation frame
     () => {},
     async () => new Uint8Array(1600).fill(255),
     128,
-    { prefetchLimit: 0 },
+    { prefetchLimit: 0, fadeMs: 250 },
   );
   cache.update(instances, streamingView(0));
   for (let i = 0; i < 12; i++) await tick();

@@ -58,7 +58,8 @@ fn atmosphereSky(
       let lod = log2(max(1.0, pixelMeters / cloudTexels));
       let mu = dot(point, sun);
       let sunlight = sunTransmittance(lut, lutSampler, bottom, top, cloudRadius, mu) * intensity;
-      let sky = textureSampleLevel(skyLight, skySampler, vec2<f32>(mu * 0.5 + 0.5, 0.5), 0.0).rgb;
+      let skyU = skyLightU(mu, f32(textureDimensions(skyLight).x));
+      let sky = textureSampleLevel(skyLight, skySampler, vec2<f32>(skyU, 0.5), 0.0).rgb;
       let cloud = cloudLight(cloudMap, cloudSampler, normal, cloudRadius, lod, pixelMeters,
         slant, cloudStrength, mu, sun, sunlight, sky * intensity + nightLight);
       if (cloud.a > 0.0) {

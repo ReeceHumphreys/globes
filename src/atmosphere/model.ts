@@ -162,7 +162,7 @@ export function buildAtmosphere(preset: AtmospherePreset, radius: number): Atmos
     }
   }
 
-  /** Same mapping as transmittanceUV in atmosphere.wgsl. */
+  /** Same mapping as sunTransmittance in atmosphere-transmittance.wgsl. */
   function transmittanceToSun(r: number, mu: number, out: Float64Array): Float64Array {
     if (hitsGround(r, mu)) return out.fill(0);
     const rho = Math.sqrt(Math.max(0, r * r - bottom * bottom));

@@ -1,24 +1,32 @@
 import { createTerrainCompute, type TerrainCompute } from "./terrain-compute.ts";
+import { terrainCacheSettings, type TerrainCacheOptions } from "./terrain-cache-state.ts";
 import {
-  terrainCacheSettings,
-  RENDER_BINDING_STRIDE,
-  type TerrainCacheOptions,
-} from "./terrain-cache-state.ts";
+  HEIGHT_FACE,
+  HEIGHT_STRIDE,
+  IMAGERY_STRIDE,
+  PAIR,
+  ROW_FLAGS,
+  ROW_HEIGHT,
+  ROW_STRIDE,
+} from "./binding-row.ts";
 import type { StreamingView } from "../imagery/priority.ts";
 import cachedNormalShader from "./shaders/cached-normal.wgsl?raw";
 import normalGradientShader from "./shaders/normal-from-gradient.wgsl?raw";
 import cachedSunlightShader from "./shaders/cached-sunlight.wgsl?raw";
+import cacheFlagsShader from "./shaders/cache-flags.wgsl?raw";
+import decodeHeightShader from "./shaders/decode-height.wgsl?raw";
+import facePointShader from "./shaders/face-point.wgsl?raw";
 import { hapkeReference } from "./hapke.ts";
 import hapkeShader from "./shaders/hapke.wgsl?raw";
 import sunlightShader from "./shaders/terrain-sunlight.wgsl?raw";
 import solarVisibilityShader from "./shaders/solar-visibility.wgsl?raw";
 import shadowHeightShader from "./shaders/shadow-height.wgsl?raw";
-import { HEIGHT_STRIDE } from "../elevation/tiles.ts";
+import { ZERO_HEIGHT_BYTES } from "../elevation/tiles.ts";
 import type { HeightTileCache } from "../elevation/tile-cache.ts";
 import heightLayerShader from "./shaders/sample-height-layer.wgsl?raw";
 import surfaceHeightShader from "./shaders/sample-surface-height.wgsl?raw";
 import surfaceNormalShader from "./shaders/surface-normal.wgsl?raw";
-import { IMAGERY_STRIDE, type ImageryCache } from "../imagery/tile-cache.ts";
+import type { ImageryCache } from "../imagery/tile-cache.ts";
 import { createCheckerboardTexture } from "./checkerboard-texture.ts";
 import { createTileGrid } from "./tile-grid.ts";
 import * as THREE from "three/webgpu";
@@ -60,6 +68,8 @@ import surfaceDetailShader from "./shaders/surface-detail.wgsl?raw";
 import nightLightsShader from "./shaders/night-lights.wgsl?raw";
 import cloudCoverShader from "./shaders/cloud-cover.wgsl?raw";
 import cloudShadowShader from "./shaders/cloud-shadow.wgsl?raw";
+import skyLightUShader from "./shaders/sky-light-u.wgsl?raw";
+import { onePixel } from "./one-pixel.ts";
 import { geographicToDirection } from "../geographic.ts";
 import { ellipsoidOffset } from "../ellipsoid.ts";
 import { assertTileInstances, type TileInstances } from "./tile-instances.ts";
@@ -99,6 +109,23 @@ export interface TileLayerOptions {
   surfaceDetail?: boolean;
   /** Polar flattening of the surface; 0 is a sphere. */
   flattening?: number;
+  /** A cache needs another frame. */
+  requestRender(): void;
+  /** Background GPU work failed. */
+  report(error: unknown): void;
+}
+
+/** Everything that changes between frames. */
+export interface TerrainFrame {
+  renderer: THREE.WebGPURenderer;
+  instances: TileInstances;
+  view: StreamingView;
+  /** Toward the sun, in the globe's frame. */
+  sun: THREE.Vector3;
+  /** Camera height above the ellipsoid. */
+  altitude: number;
+  overlays: readonly SurfaceOverlay[];
+  light: AtmosphereLight | null;
 }
 
 export function createTileLayer({
@@ -112,6 +139,8 @@ export function createTileLayer({
   waterMask,
   surfaceDetail = false,
   flattening = 0,
+  requestRender,
+  report,
 }: TileLayerOptions) {
   assertTileInstances(instances);
   const capacity = instances.capacity;
@@ -145,30 +174,23 @@ export function createTileLayer({
   const faceUVs = instanceAttribute("tileFaceUV", instances.faceUVs, 4);
   // Image and height records share ONE vertex-buffer binding.
   const imageBuffer = new THREE.InstancedInterleavedBuffer(
-    new Float32Array(capacity * RENDER_BINDING_STRIDE),
-    RENDER_BINDING_STRIDE,
+    new Float32Array(capacity * ROW_STRIDE),
+    ROW_STRIDE,
   );
   imageBuffer.setUsage(THREE.DynamicDrawUsage);
-  geometry.setAttribute("imageryLayers", new THREE.InterleavedBufferAttribute(imageBuffer, 2, 0));
-  geometry.setAttribute("imageryUV", new THREE.InterleavedBufferAttribute(imageBuffer, 4, 2));
-  geometry.setAttribute("parentImageryUV", new THREE.InterleavedBufferAttribute(imageBuffer, 4, 6));
-  geometry.setAttribute("imageryBlend", new THREE.InterleavedBufferAttribute(imageBuffer, 1, 10));
-  geometry.setAttribute(
-    "heightLayers",
-    new THREE.InterleavedBufferAttribute(imageBuffer, 2, IMAGERY_STRIDE),
-  );
-  geometry.setAttribute(
-    "heightUV",
-    new THREE.InterleavedBufferAttribute(imageBuffer, 4, IMAGERY_STRIDE + 2),
-  );
-  geometry.setAttribute(
-    "parentHeightUV",
-    new THREE.InterleavedBufferAttribute(imageBuffer, 4, IMAGERY_STRIDE + 6),
-  );
-  geometry.setAttribute(
-    "heightBlendFace",
-    new THREE.InterleavedBufferAttribute(imageBuffer, 4, IMAGERY_STRIDE + 10),
-  );
+  const rowAttribute = (name: string, size: number, offset: number) =>
+    geometry.setAttribute(name, new THREE.InterleavedBufferAttribute(imageBuffer, size, offset));
+  rowAttribute("imageryLayers", 2, PAIR.layers);
+  rowAttribute("imageryUV", 4, PAIR.best);
+  rowAttribute("parentImageryUV", 4, PAIR.parent);
+  rowAttribute("imageryBlend", 1, PAIR.blend);
+  rowAttribute("heightLayers", 2, ROW_HEIGHT + PAIR.layers);
+  rowAttribute("heightUV", 4, ROW_HEIGHT + PAIR.best);
+  rowAttribute("parentHeightUV", 4, ROW_HEIGHT + PAIR.parent);
+  // Blend, face, height range, cache flags: four neighbours read as one vec4.
+  if (HEIGHT_FACE !== PAIR.blend + 1 || ROW_FLAGS !== ROW_HEIGHT + HEIGHT_STRIDE)
+    throw new Error("heightBlendFace no longer matches the binding row");
+  rowAttribute("heightBlendFace", 4, ROW_HEIGHT + PAIR.blend);
   const colors = instanceAttribute("tileColor", instances.colors, 3);
   geometry.instanceCount = 0;
   // CPU culling cannot infer how WGSL expands the grid onto the body surface.
@@ -223,20 +245,27 @@ export function createTileLayer({
     atmosphereTop = uniform(2),
     atmosphereIntensity = uniform(1);
   const groundSunCosine = cubeDirection.normalize().dot(sun.normalize());
-  const skyLightU = groundSunCosine
-    .add(1)
-    .mul(0.5 * (SKY_LIGHT_WIDTH - 1))
-    .add(0.5)
-    .div(SKY_LIGHT_WIDTH);
-  const transmittanceNode = texture(onePixel(255)),
-    skyLightNode = texture(onePixel(0), vec2(skyLightU, 0.5));
+  const skyLightU = wgslFn(skyLightUShader)({
+    mu: groundSunCosine,
+    width: float(SKY_LIGHT_WIDTH),
+  }) as THREE.Node<"float">;
+  const emptyTransmittance = onePixel(255),
+    emptySkyLight = onePixel(0);
+  const transmittanceNode = texture(emptyTransmittance),
+    skyLightNode = texture(emptySkyLight, vec2(skyLightU, 0.5));
   let heightCache: HeightTileCache | undefined;
-  const heightArray = new THREE.DataArrayTexture(new Uint8Array([32, 78, 0, 255]), 1, 1, 1);
+  const heightArray = new THREE.DataArrayTexture(
+    new Uint8Array([...ZERO_HEIGHT_BYTES, 0, 255]),
+    1,
+    1,
+    1,
+  );
   heightArray.needsUpdate = true;
   const heightArrayNode = texture(heightArray);
-  const sampleHeightLayer = wgslFn(heightLayerShader);
   // wgslFn returns a callable node proxy; the type declarations omit its CodeNode interface.
   const include = (fn: ReturnType<typeof wgslFn>) => fn as unknown as THREE.CodeNode;
+  const sampleHeightLayer = wgslFn(heightLayerShader, [include(wgslFn(decodeHeightShader))]);
+  const cacheFlags = wgslFn(cacheFlagsShader);
   const sampleSurfaceHeight = wgslFn(surfaceHeightShader, [include(sampleHeightLayer)]);
   const heightRecord = attribute("heightBlendFace", "vec4");
   const fragmentHeightRecord = varying(heightRecord);
@@ -305,12 +334,15 @@ export function createTileLayer({
     }) as THREE.Node<"vec2">,
   );
   const checkerboard = createCheckerboardTexture();
-  const shadowHeight = wgslFn(shadowHeightShader, [include(sampleHeightLayer)]);
+  const shadowHeight = wgslFn(shadowHeightShader, [
+    include(sampleHeightLayer),
+    include(wgslFn(facePointShader)),
+  ]);
   const solarVisibility = wgslFn(solarVisibilityShader);
   // One interpolated float. A per-pixel march needs more varyings than WebGPU allows (16).
   const terrainSunlight = wgslFn(sunlightShader, [include(shadowHeight), include(solarVisibility)]);
   const sunlight = varying(
-    wgslFn(cachedSunlightShader, [include(terrainSunlight)])({
+    wgslFn(cachedSunlightShader, [include(terrainSunlight), include(cacheFlags)])({
       cache: sunlightCacheNode,
       cacheFlags: heightRecord.w,
       localUV: uv(),
@@ -348,6 +380,7 @@ export function createTileLayer({
       wgslFn(surfaceNormalShader, [include(sampleSurfaceHeight), include(normalFromGradient)]),
     ),
     include(normalFromGradient),
+    include(cacheFlags),
   ])({
     gradients: gradientNode,
     gradientSampler: sampler(gradientNode),
@@ -493,7 +526,15 @@ export function createTileLayer({
 
   // Reuse the same attribute objects and GPU buffers. A Wasm memory growth may
   // require replacement typed-array views; pass the rebound descriptor here.
-  function commit(next: TileInstances = instances): void {
+  let committedRevision = -1,
+    committedBuffer: ArrayBuffer | undefined;
+  function commit(next: TileInstances): void {
+    if (
+      next === instances &&
+      next.revision === committedRevision &&
+      next.buffer === committedBuffer
+    )
+      return;
     assertTileInstances(next);
     if (next.capacity !== capacity)
       throw new RangeError("Instance capacity cannot change after binding.");
@@ -521,6 +562,8 @@ export function createTileLayer({
     geometry.instanceCount = next.count;
     mesh.visible = next.count > 0;
     instances = next;
+    committedRevision = next.revision;
+    committedBuffer = next.buffer;
   }
 
   let disposed = false;
@@ -537,8 +580,8 @@ export function createTileLayer({
     heightArray.dispose();
     emptyShadowIndex.dispose();
     emptyClouds.dispose();
-    transmittanceNode.value.dispose();
-    skyLightNode.value.dispose();
+    emptyTransmittance.dispose();
+    emptySkyLight.dispose();
     overviewTexture?.dispose();
     nightLights?.dispose();
     waterMask?.dispose();
@@ -560,7 +603,7 @@ export function createTileLayer({
   function commitImagery(count: number): void {
     imageBuffer.clearUpdateRanges();
     if (count > 0) {
-      const stride = RENDER_BINDING_STRIDE;
+      const stride = ROW_STRIDE;
       for (let i = 0; i < count; i++) {
         if (tiledImagery)
           imageBuffer.array.set(
@@ -570,11 +613,11 @@ export function createTileLayer({
         if (heightCache)
           imageBuffer.array.set(
             heightCache.bindings.data.subarray(i * HEIGHT_STRIDE, (i + 1) * HEIGHT_STRIDE),
-            i * stride + IMAGERY_STRIDE,
+            i * stride + ROW_HEIGHT,
           );
       }
       for (let i = 0; i < count; i++)
-        imageBuffer.array[i * stride + stride - 1] = compute?.flags[i] ?? 0;
+        imageBuffer.array[i * stride + ROW_FLAGS] = compute?.flags[i] ?? 0;
       imageBuffer.addUpdateRange(0, count * stride);
       imageBuffer.needsUpdate = true;
     }
@@ -597,11 +640,67 @@ export function createTileLayer({
     if (next.elevation !== undefined)
       elevationEnabled.value = next.elevation && heightCache ? 1 : 0;
   }
-  function setSun(x: number, y: number, z: number): void {
-    sun.value.set(x, y, z).normalize();
+  function setLight(light: AtmosphereLight | null): void {
+    atmosphereEnabled.value = light ? 1 : 0;
+    transmittanceNode.value = light?.transmittance ?? emptyTransmittance;
+    skyLightNode.value = light?.skyLight ?? emptySkyLight;
+    cloudNode.value = light?.cloudMap ?? emptyClouds;
+    cloudHeight.value = light?.cloudAltitude ?? 0;
+    // The sky draws the clouds, so without one there is nothing to cast their shadow.
+    cloudStrength.value = light?.cloudStrength ?? 0;
+    if (!light) return;
+    atmosphereBottom.value = light.bottom;
+    atmosphereTop.value = light.top;
+    atmosphereIntensity.value = light.intensity;
+    nightLight.value.fromArray(light.nightLight);
+  }
+  // Recompiles the material only if the list changed.
+  function setOverlays(next: readonly SurfaceOverlay[]): void {
+    if (next.length === overlays.length && next.every((overlay, i) => overlay === overlays[i]))
+      return;
+    overlays = next;
+    material.colorNode = next.reduce(
+      (color, overlay) => overlay.over(color, surfacePoint),
+      surfaceColor,
+    );
+    material.needsUpdate = true;
+  }
+  function prepareCaches(renderer: THREE.WebGPURenderer, view: StreamingView): void {
+    const active =
+      elevationEnabled.value > 0 && shadingEnabled.value > 0 && imageryEnabled.value > 0;
+    compute?.prepare(
+      renderer,
+      instances,
+      view.now,
+      [sun.value.x, sun.value.y, sun.value.z, shadowSteps.value].join("/"),
+      active,
+      active && shadowsEnabled.value > 0,
+      view,
+      requestRender,
+      report,
+    );
+  }
+  /** Draw this frame: light and overlays, then the tiles, their streaming and their caches. */
+  function update(frame: TerrainFrame): void {
+    sun.value.copy(frame.sun).normalize();
+    setLight(frame.light);
+    setOverlays(frame.overlays);
+    // Waves too small to see from orbit read as roughness; closer in, they are drawn.
+    waterRoughness.value = THREE.MathUtils.lerp(
+      CLOSE_WATER_ROUGHNESS,
+      ORBIT_WATER_ROUGHNESS,
+      THREE.MathUtils.smoothstep(frame.altitude, 5_000, 400_000),
+    );
+    commit(frame.instances);
+    tiledImagery?.update(instances, frame.view);
+    heightCache?.update(instances, frame.view);
+    // The caches decide what is baked, and the row carries that decision to the shaders.
+    prepareCaches(frame.renderer, frame.view);
+    commitImagery(instances.count);
   }
   return {
     set,
+    update,
     setHeightTiles(cache: HeightTileCache) {
       shadowIndexNode.value = cache.shadowIndex;
       heightCoreSize.value = cache.manifest.tileSize;
@@ -612,98 +711,35 @@ export function createTileLayer({
       compute?.dispose();
       heightCache = cache;
       heightArrayNode.value = cache.texture;
-      elevationEnabled.value = 1;
-      {
-        compute = createTerrainCompute(
-          cache,
-          segments,
-          {
-            heightTiles: heightArrayNode,
-            indexMap: shadowIndexNode,
-            radius,
-            sun,
-            minHeight: minimumHeight,
-            maxHeight: maximumHeight,
-            coreSize: heightCoreSize,
-            gutter: heightGutter,
-            maxLevel: heightMaxLevel,
-            steps: shadowSteps,
-          },
-          {
-            direction: directionFunction,
-            surfaceHeight: sampleSurfaceHeight,
-            sunlight: terrainSunlight,
-          },
-          cacheSettings,
-        );
-        gradientNode.value = compute.gradients;
-        sunlightCacheNode.value = compute.sunlight;
-        sunlightColumns.value = compute.columns;
-      }
-      material.needsUpdate = true;
-    },
-    prepareCaches(
-      renderer: THREE.WebGPURenderer,
-      now: number,
-      view: StreamingView,
-      requestRender: () => void,
-      report: (error: unknown) => void,
-    ) {
-      const active =
-        elevationEnabled.value > 0 && shadingEnabled.value > 0 && imageryEnabled.value > 0;
-      compute?.prepare(
-        renderer,
-        instances,
-        now,
-        [sun.value.x, sun.value.y, sun.value.z, shadowSteps.value].join("/"),
-        active,
-        active && shadowsEnabled.value > 0,
-        view,
-        requestRender,
-        report,
+      compute = createTerrainCompute(
+        cache,
+        segments,
+        {
+          heightTiles: heightArrayNode,
+          indexMap: shadowIndexNode,
+          radius,
+          sun,
+          minHeight: minimumHeight,
+          maxHeight: maximumHeight,
+          coreSize: heightCoreSize,
+          gutter: heightGutter,
+          maxLevel: heightMaxLevel,
+          steps: shadowSteps,
+        },
+        {
+          direction: directionFunction,
+          surfaceHeight: sampleSurfaceHeight,
+          sunlight: terrainSunlight,
+        },
+        cacheSettings,
       );
+      gradientNode.value = compute.gradients;
+      sunlightCacheNode.value = compute.sunlight;
+      sunlightColumns.value = compute.columns;
+      material.needsUpdate = true;
     },
     cacheStats: () => compute?.stats,
-    setSun,
-    /** Light the ground through an atmosphere, or not (null). Textures stay owned by it. */
-    setAtmosphere(atmosphere: AtmosphereLight | null) {
-      atmosphereEnabled.value = atmosphere ? 1 : 0;
-      if (!atmosphere) return;
-      transmittanceNode.value = atmosphere.transmittance;
-      skyLightNode.value = atmosphere.skyLight;
-      atmosphereBottom.value = atmosphere.bottom;
-      atmosphereTop.value = atmosphere.top;
-      atmosphereIntensity.value = atmosphere.intensity;
-      nightLight.value.fromArray(atmosphere.nightLight);
-    },
-    /** Waves too small to see from orbit read as roughness; closer in, they are drawn. */
-    setCameraAltitude(altitude: number) {
-      waterRoughness.value = THREE.MathUtils.lerp(
-        CLOSE_WATER_ROUGHNESS,
-        ORBIT_WATER_ROUGHNESS,
-        THREE.MathUtils.smoothstep(altitude, 5_000, 400_000),
-      );
-    },
-    /** Paint these over the surface, recompiling the material only if the list changed. */
-    setOverlays(next: readonly SurfaceOverlay[]) {
-      if (next.length === overlays.length && next.every((overlay, i) => overlay === overlays[i]))
-        return;
-      overlays = next;
-      material.colorNode = next.reduce(
-        (color, overlay) => overlay.over(color, surfacePoint),
-        surfaceColor,
-      );
-      material.needsUpdate = true;
-    },
-    /** Shade the ground under a cloud layer. The texture stays owned by the caller. */
-    setClouds(map: THREE.Texture | undefined, height: number, strength: number) {
-      cloudNode.value = map ?? emptyClouds;
-      cloudHeight.value = height;
-      cloudStrength.value = strength;
-    },
     group,
-    commit,
-    commitImagery,
     dispose,
   };
 }
@@ -711,11 +747,3 @@ export function createTileLayer({
 const _normal = new THREE.Vector3();
 const ORBIT_WATER_ROUGHNESS = 0.31;
 const CLOSE_WATER_ROUGHNESS = 0.12;
-
-function onePixel(value: number) {
-  const texture = new THREE.DataTexture(new Uint8Array([value, value, value, 255]), 1, 1);
-  // Nearest-filtered textures get no WGSL sampler, and the shader passes one.
-  texture.minFilter = texture.magFilter = THREE.LinearFilter;
-  texture.needsUpdate = true;
-  return texture;
-}

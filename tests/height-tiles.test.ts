@@ -2,13 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import {
-  parseHeightTiles,
-  decodeHeightTile,
-  HEIGHT_STRIDE,
-  sampleTile,
-} from "../src/elevation/tiles.ts";
+import { parseHeightTiles, decodeHeightTile, sampleTile } from "../src/elevation/tiles.ts";
 import { createHeightTileCache } from "../src/elevation/tile-cache.ts";
+import { HEIGHT_STRIDE } from "../src/rendering/binding-row.ts";
 import { createTileBatch } from "../src/tiles/tile.ts";
 import { createTileInstances, writeTileInstances } from "../src/rendering/tile-instances.ts";
 const width = 20;
@@ -92,7 +88,7 @@ test("CPU clearance and GPU bindings share parent/fine height fades with no unbo
         requests.push({ url, signal, resolve, reject, done: false }),
       ),
     8,
-    100,
+    { fadeMs: 100 },
   );
   const instances = terrain();
   try {
@@ -176,7 +172,7 @@ test("failed or corrupt fine heights leave coarse geometry available; disposal a
       return bytes(1999);
     },
     8,
-    0,
+    { fadeMs: 0 },
   );
   const instances = terrain();
   try {
@@ -234,12 +230,11 @@ test("height metadata pages load only around the view and expose validated fine 
     },
   };
   parseHeightTiles(m);
-  const original = globalThis.fetch;
   let pages = 0;
-  globalThis.fetch = async (url) => {
-    assert.equal(String(url), "https://example.test/heights/metadata/0/0/0/0.json");
+  const loadPage = async (url) => {
+    assert.equal(url, "https://example.test/heights/metadata/0/0/0/0.json");
     pages++;
-    return new Response(pageBytes);
+    return pageBytes;
   };
   const requested = [];
   const cache = createHeightTileCache(
@@ -252,7 +247,7 @@ test("height metadata pages load only around the view and expose validated fine 
       return bytes(url.endsWith("/1/1/1.u16") ? 2000 : 1000);
     },
     8,
-    0,
+    { fadeMs: 0, loadPage },
   );
   try {
     for (let i = 0; i < 16; i++) {
@@ -265,7 +260,50 @@ test("height metadata pages load only around the view and expose validated fine 
     assert.equal(cache.sampleDirection(1, 0.2, -0.2), 2000);
   } finally {
     cache.dispose();
-    globalThis.fetch = original;
+  }
+});
+
+test("a failed metadata page reaches onError, through the load seam", async () => {
+  const m = fixture(),
+    fine = m.tiles["0/1/1/1"];
+  delete m.tiles["0/1/1/1"];
+  const pageBytes = new TextEncoder().encode(JSON.stringify({ tiles: { "0/1/1/1": fine } }));
+  m.pageLevel = 0;
+  m.pages = {
+    "0/0/0/0": {
+      path: "metadata/0/0/0/0.json",
+      lower: 1000,
+      upper: 2000,
+      sha256: createHash("sha256").update(pageBytes).digest("hex"),
+    },
+  };
+  parseHeightTiles(m);
+  const errors = [];
+  const cache = createHeightTileCache(
+    m,
+    "https://example.test/heights/manifest.json",
+    1,
+    () => {},
+    async () => bytes(1000),
+    8,
+    {
+      fadeMs: 0,
+      loadPage: async () => {
+        throw new Error("offline");
+      },
+      onError: (error) => errors.push(error),
+    },
+  );
+  try {
+    for (let i = 0; i < 4; i++) {
+      cache.update(terrain(), view(i));
+      await tick();
+    }
+    assert.equal(errors.length, 1);
+    assert.match(errors[0].message, /metadata page/);
+    assert.equal(errors[0].cause.message, "offline");
+  } finally {
+    cache.dispose();
   }
 });
 
@@ -277,7 +315,7 @@ test("camera sampling respects the geometry level even when finer heights are pr
     () => {},
     async (url) => bytes(url.endsWith("/1/1/1.u16") ? 2000 : 1000),
     8,
-    0,
+    { fadeMs: 0 },
   );
   const coarse = terrain();
   coarse.faceUVs.set([0, 0, 1, 1]);

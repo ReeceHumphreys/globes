@@ -1,4 +1,4 @@
-import { createTileBytesLoader } from "../tiles/tile-source.ts";
+import { createTileBytesLoader, fetchTileBytes } from "../tiles/tile-source.ts";
 import { createShadowHeightIndex } from "../rendering/shadow-height-index.ts";
 import {
   DataArrayTexture,
@@ -9,13 +9,27 @@ import {
 } from "three/webgpu";
 import type { TileInstances } from "../rendering/tile-instances.ts";
 import { facePoint } from "../tiles/roots.ts";
-import { createResidentTiles, instanceLevel, tileKey } from "../tiles/resident-tiles.ts";
+import {
+  createResidentTiles,
+  DEFAULT_FADE_MS,
+  instanceCenter,
+  instanceLevel,
+  tileKey,
+  tileKeyAt,
+} from "../tiles/resident-tiles.ts";
+import {
+  HEIGHT_FACE,
+  HEIGHT_RANGE,
+  HEIGHT_STRIDE,
+  writeTilePair,
+} from "../rendering/binding-row.ts";
 import { screenImportance, type StreamingView } from "../imagery/priority.ts";
 import {
-  HEIGHT_STRIDE,
+  heightMeters,
   parseHeightPage,
   decodeHeightTile,
   sampleTile,
+  ZERO_HEIGHT_BYTES,
   type HeightTileManifest,
   type HeightTileLoader,
 } from "./tiles.ts";
@@ -32,15 +46,23 @@ export function createHeightTileCache(
   onChange: () => void,
   load: HeightTileLoader = createTileBytesLoader(manifest.storage, url),
   residentLimit = 64,
-  fadeMs = 300,
+  {
+    fadeMs = DEFAULT_FADE_MS,
+    loadPage = fetchTileBytes,
+    onError = console.warn,
+  }: {
+    fadeMs?: number;
+    /** Metadata pages are plain files, even when tiles come from an archive. */
+    loadPage?: HeightTileLoader;
+    onError?(error: unknown): void;
+  } = {},
 ) {
   const width = manifest.tileSize + 2 * manifest.gutter,
     layerBytes = width * width * 2;
   const bytes = new Uint8Array(layerBytes * (residentLimit + 1));
   // Slot zero is the zero-meter sphere, not the uint16 value zero (-10 km).
   for (let i = 0; i < layerBytes; i += 2) {
-    bytes[i] = 32;
-    bytes[i + 1] = 78;
+    bytes.set(ZERO_HEIGHT_BYTES, i);
   }
   const texture = new DataArrayTexture(bytes, width, width, residentLimit + 1);
   texture.name = "Resident numeric height tiles";
@@ -106,17 +128,14 @@ export function createHeightTileCache(
       onChange();
       pumpPages();
     },
+    onError,
   });
+  const texels = {
+    scale: manifest.tileSize / width,
+    offset: manifest.gutter / width,
+    flipV: true,
+  };
   type Resident = NonNullable<ReturnType<typeof tiles.get>>;
-  function idAt(f: number, l: number, u: number, v: number) {
-    const n = 2 ** l;
-    return tileKey(
-      f,
-      l,
-      Math.min(n - 1, Math.max(0, Math.floor(u * n))),
-      Math.min(n - 1, Math.max(0, Math.floor(v * n))),
-    );
-  }
   function sample(r: Resident | undefined, u: number, v: number) {
     if (!r) return 0;
     const n = 2 ** r.level;
@@ -128,7 +147,7 @@ export function createHeightTileCache(
     );
   }
   function pageAt(f: number, u: number, v: number) {
-    return manifest.pages ? idAt(f, manifest.pageLevel!, u, v) : undefined;
+    return manifest.pages ? tileKeyAt(f, manifest.pageLevel!, u, v) : undefined;
   }
   function pumpPages() {
     if (disposed) return;
@@ -138,10 +157,8 @@ export function createHeightTileCache(
       const page = manifest.pages![id],
         controller = new AbortController();
       pendingPages.set(id, controller);
-      void fetch(new URL(page.path, url), { signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) throw new Error("Height metadata page HTTP " + response.status);
-          const pageBytes = await response.arrayBuffer();
+      void loadPage(new URL(page.path, url).href, controller.signal)
+        .then(async (pageBytes) => {
           if ((await sha256Hex(pageBytes)) !== page.sha256)
             throw new Error("Height metadata page checksum mismatch.");
           if (disposed || controller.signal.aborted || !wantedPages.has(id)) return;
@@ -166,7 +183,7 @@ export function createHeightTileCache(
         .catch((error) => {
           if (!disposed && !controller.signal.aborted) {
             failedPages.add(id);
-            console.warn("[Globes] Height metadata page failed", id, error);
+            onError(new Error(`Height metadata page ${id} failed`, { cause: error }));
           }
         })
         .finally(() => {
@@ -177,27 +194,6 @@ export function createHeightTileCache(
           onChange();
         });
     }
-  }
-  function writeUV(row: number, r: Resident | undefined, offset: number, instances: TileInstances) {
-    const data = bindings.data,
-      index = row * HEIGHT_STRIDE + offset;
-    if (!r) {
-      data.fill(0, index, index + 4);
-      return;
-    }
-    const scale = manifest.tileSize / width,
-      n = 2 ** r.level,
-      pad = manifest.gutter / width;
-    const j = row * 4;
-    data.set(
-      [
-        pad + (instances.faceUVs[j] * n - r.x) * scale,
-        pad + (1 - (instances.faceUVs[j + 1] * n - r.y)) * scale,
-        n * instances.faceUVs[j + 2] * scale,
-        -n * instances.faceUVs[j + 3] * scale,
-      ],
-      index,
-    );
   }
   function wantPages(instances: TileInstances) {
     pageFrame++;
@@ -211,15 +207,9 @@ export function createHeightTileCache(
       }
     };
     want(...facePoint(instances.origin[0], instances.origin[1], instances.origin[2]));
-    for (let i = 0; i < instances.count; i++) {
-      const j = i * 4;
+    for (let i = 0; i < instances.count; i++)
       if (instanceLevel(instances, i) > (manifest.pageLevel ?? 20))
-        want(
-          instances.faces[i],
-          instances.faceUVs[j] + instances.faceUVs[j + 2] / 2,
-          instances.faceUVs[j + 1] + instances.faceUVs[j + 3] / 2,
-        );
-    }
+        want(instances.faces[i], ...instanceCenter(instances, i));
     for (const [id, c] of pendingPages) if (!wantedPages.has(id)) c.abort();
     for (const id of failedPages) if (!wantedPages.has(id)) failedPages.delete(id);
   }
@@ -230,17 +220,10 @@ export function createHeightTileCache(
     wantPages(instances);
     if (view) clock = view.now;
     tiles.setClock(clock, fadeMs);
-    animating = false;
     // Start late network arrivals on the frame that reveals them, not at the
     // stale clock from their request. Activate coarse offscreen roots too so
     // shadow rays have the same smoothly arriving global fallback.
-    for (let f = 0; f < 6; f++) {
-      const root = tiles.get(tileKey(f, 0, 0, 0));
-      if (root) {
-        root.fadeStart ??= clock;
-        animating ||= clock - root.fadeStart < fadeMs;
-      }
-    }
+    animating = tiles.startRootFades();
     noteFade();
     const previousCap = tiles.cap;
     tiles.plan(
@@ -251,16 +234,11 @@ export function createHeightTileCache(
     for (let i = 0; i < instances.count; i++) {
       const j = i * 4,
         level = instanceLevel(instances, i),
-        u = instances.faceUVs[j] + instances.faceUVs[j + 2] * 0.5,
-        v = instances.faceUVs[j + 1] + instances.faceUVs[j + 3] * 0.5;
+        [u, v] = instanceCenter(instances, i);
       const p = tiles.pair(instances.faces[i], level, u, v, true),
         row = i * HEIGHT_STRIDE;
-      bindings.data[row] = p.best?.slot ?? 0;
-      bindings.data[row + 1] = p.parent?.slot ?? 0;
-      writeUV(i, p.best, 2, instances);
-      writeUV(i, p.parent, 6, instances);
-      bindings.data[row + 10] = p.blend;
-      bindings.data[row + 11] = instances.faces[i];
+      writeTilePair(bindings.data, row, p, instances, i, texels);
+      bindings.data[row + HEIGHT_FACE] = instances.faces[i];
       rangeForTile(
         instances.faces[i],
         level,
@@ -268,7 +246,7 @@ export function createHeightTileCache(
         Math.round(instances.faceUVs[j + 1] / instances.faceUVs[j + 3]),
         bindingRange,
       );
-      bindings.data[row + 12] = bindingRange[1] - bindingRange[0];
+      bindings.data[row + HEIGHT_RANGE] = bindingRange[1] - bindingRange[0];
       animating ||= !!p.best && p.blend < 1;
     }
     const [f, u, v] = facePoint(instances.origin[0], instances.origin[1], instances.origin[2]);
@@ -341,8 +319,8 @@ export function createHeightTileCache(
       }
     const center = sampleTile(r.values, width, px + span * 0.5, py + span * 0.5),
       deviation = (r.stepX + r.stepY) * span * 0.5;
-    out[0] = Math.max(lo * 0.5 - 10000, center - deviation) - 0.5;
-    out[1] = Math.min(hi * 0.5 - 10000, center + deviation) + 0.5;
+    out[0] = Math.max(heightMeters(lo), center - deviation) - 0.5;
+    out[1] = Math.min(heightMeters(hi), center + deviation) + 0.5;
   }
   const temp = new Float64Array(2);
   const bindingRange = new Float64Array(2);
@@ -350,10 +328,7 @@ export function createHeightTileCache(
   // fade ends, so intermediate frames keep the memory.
   let fadeOpen = false;
   function noteFade(): void {
-    let still = false;
-    if (fadeMs > 0)
-      for (const record of tiles.resident())
-        if (record.fadeStart !== undefined && clock - record.fadeStart < fadeMs) still = true;
+    const still = tiles.fading();
     if (fadeOpen && !still) rangeMemo.clear();
     fadeOpen = still;
   }
@@ -371,7 +346,7 @@ export function createHeightTileCache(
       record: Resident | undefined,
       selectedLevel = 0;
     for (let level = 0; level <= Math.min(l, manifest.maxLevel); level++) {
-      const id = idAt(f, level, u, v);
+      const id = tileKeyAt(f, level, u, v);
       if (metadata[id]) {
         info = metadata[id];
         record = tiles.get(id);

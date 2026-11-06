@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
-import { Scene, DataArrayTexture } from "three/webgpu";
+import { Vector3, Scene, DataArrayTexture } from "three/webgpu";
 import { createTileBatch } from "../src/tiles/tile.ts";
 import { createTileInstances, writeTileInstances } from "../src/rendering/tile-instances.ts";
 import { selectTiles } from "../src/tiles/quadtree.ts";
@@ -29,11 +29,23 @@ const { createTileLayer } = await import(
   `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
 );
 
+const callbacks = { requestRender() {}, report() {} };
+const draw = (layer, instances) =>
+  layer.update({
+    renderer: {},
+    instances,
+    view: { clipFromRelative: [], projectionScale: 1, now: 0 },
+    sun: new Vector3(1, 0, 0),
+    altitude: 0,
+    overlays: [],
+    light: null,
+  });
+
 test("one grid and material bind the producer arrays across zoom levels", () => {
   const radius = 1_737_400;
   const tiles = createTileBatch(384);
   let instances = createTileInstances(384);
-  const layer = createTileLayer({ radiusMeters: radius, segments: 32, instances });
+  const layer = createTileLayer({ radiusMeters: radius, segments: 32, instances, ...callbacks });
   const scene = new Scene();
   scene.add(layer.group);
   const mesh = layer.group.children[0];
@@ -67,7 +79,7 @@ test("one grid and material bind the producer arrays across zoom levels", () => 
     selectTiles(tiles, level);
     writeTileInstances(tiles, instances, radius);
     const versions = buffers.map((buffer) => buffer.version);
-    layer.commit(instances);
+    draw(layer, instances);
     assert.equal(layer.group.children.length, 1);
     assert.equal(layer.group.children[0], mesh);
     assert.equal(mesh.geometry, geometry);
@@ -93,12 +105,13 @@ test("one grid and material bind the producer arrays across zoom levels", () => 
 
   const snapshot = buffers.map((buffer) => buffer.array.slice());
   const badCount = { ...instances, count: 385 };
-  assert.throws(() => layer.commit(badCount), /Invalid/);
+  assert.throws(() => draw(layer, badCount), /Invalid/);
   assert.equal(geometry.instanceCount, 6);
   buffers.forEach((buffer, i) => assert.deepEqual(buffer.array, snapshot[i]));
 
   instances.count = 0;
-  layer.commit(instances);
+  instances.revision++;
+  draw(layer, instances);
   assert.equal(mesh.visible, false);
   assert.equal(geometry.instanceCount, 0);
 
@@ -116,7 +129,7 @@ test("one grid and material bind the producer arrays across zoom levels", () => 
 
 test("tiled elevation uses the existing instance buffer and keeps eight bindings / sixteen attributes", () => {
   const instances = createTileInstances(6),
-    layer = createTileLayer({ radiusMeters: 1737400, segments: 32, instances }),
+    layer = createTileLayer({ radiusMeters: 1737400, segments: 32, instances, ...callbacks }),
     geometry = layer.group.children[0].geometry;
   try {
     const attributes = Object.values(geometry.attributes),
@@ -135,7 +148,7 @@ test("tiled elevation uses the existing instance buffer and keeps eight bindings
 
 test("imagery-only consumers do not require a Moon overview texture", () => {
   const texture = new DataArrayTexture(new Uint8Array(4), 1, 1, 1);
-  const cache = { texture, bindings: { data: new Float32Array(6 * 11), revision: 0 } };
+  const cache = { texture, bindings: { data: new Float32Array(6 * 11) } };
   const layer = createTileLayer({
     radiusMeters: 3389500,
     segments: 32,

@@ -1,6 +1,9 @@
 import { validateTileStorage, type PMTilesStorage } from "../tiles/tile-source.ts";
 import { matchesBody, type GlobeBody } from "../body.ts";
-export const HEIGHT_STRIDE = 13;
+/** Meters from a stored uint16 height. decode-height.wgsl matches it. */
+export const heightMeters = (value: number) => value * 0.5 - 10000;
+/** The stored bytes of zero meters, little-endian. */
+export const ZERO_HEIGHT_BYTES = [32, 78] as const;
 export interface HeightTileInfo {
   path: string;
   min: number;
@@ -139,7 +142,7 @@ export function decodeHeightTile(
     lo = Math.min(lo, v);
     hi = Math.max(hi, v);
   }
-  if (lo * 0.5 - 10000 !== info.min || hi * 0.5 - 10000 !== info.max)
+  if (heightMeters(lo) !== info.min || heightMeters(hi) !== info.max)
     throw new Error("Height tile range mismatch.");
   return values;
 }
@@ -152,11 +155,9 @@ export function sampleTile(values: Uint16Array, width: number, x: number, y: num
     y1 = Math.min(width - 1, y0 + 1),
     fx = x - x0,
     fy = y - y0;
-  return (
-    ((1 - fy) * ((1 - fx) * values[y0 * width + x0] + fx * values[y0 * width + x1]) +
-      fy * ((1 - fx) * values[y1 * width + x0] + fx * values[y1 * width + x1])) *
-      0.5 -
-    10000
+  return heightMeters(
+    (1 - fy) * ((1 - fx) * values[y0 * width + x0] + fx * values[y0 * width + x1]) +
+      fy * ((1 - fx) * values[y1 * width + x0] + fx * values[y1 * width + x1]),
   );
 }
 export function parseHeightPage(

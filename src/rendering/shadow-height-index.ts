@@ -1,4 +1,5 @@
 import { DataTexture, FloatType, RGBAFormat, NearestFilter, NoColorSpace } from "three/webgpu";
+import { fadeWeight } from "../tiles/resident-tiles.ts";
 
 export type ShadowHeightRecord = {
   face: number;
@@ -42,13 +43,7 @@ export function createShadowHeightIndex(residentLimit: number, maxLevel: number)
         node = child;
       }
       data[node * 8 + 4] = record.slot;
-      const t =
-        record.fadeStart === undefined
-          ? 0
-          : fadeMs === 0
-            ? 1
-            : Math.min(1, Math.max(0, (now - record.fadeStart) / fadeMs));
-      data[node * 8 + 5] = t * t * (3 - 2 * t);
+      data[node * 8 + 5] = fadeWeight(record.fadeStart, now, fadeMs);
     }
     if (data.some((value, i) => value !== previous[i])) {
       previous.set(data);

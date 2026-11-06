@@ -1,14 +1,14 @@
 import * as THREE from "three/webgpu";
 import { Fn, instanceIndex, uvec2, uniform, texture, textureStore, wgslFn } from "three/tsl";
 import gradientShader from "./shaders/height-gradient.wgsl?raw";
+import decodeHeightShader from "./shaders/decode-height.wgsl?raw";
 import bakeShader from "./shaders/bake-sunlight.wgsl?raw";
 import type { HeightTileCache } from "../elevation/tile-cache.ts";
-import { HEIGHT_STRIDE } from "../elevation/tiles.ts";
+import { GRADIENT_READY_BIT, HEIGHT_STRIDE, PAIR } from "./binding-row.ts";
 import type { TileInstances } from "./tile-instances.ts";
 import { screenImportance, type StreamingView } from "../imagery/priority.ts";
 import {
   createSunlightCacheState,
-  GRADIENT_READY_BIT,
   terrainCacheSettings,
   type TerrainCacheOptions,
 } from "./terrain-cache-state.ts";
@@ -72,7 +72,7 @@ export function createTerrainCompute(
     jobBest = uniform(new THREE.Vector4()),
     jobParent = uniform(new THREE.Vector4());
   const include = (fn: FunctionNode) => fn as unknown as THREE.CodeNode;
-  const gradientFn = wgslFn(gradientShader);
+  const gradientFn = wgslFn(gradientShader, [include(wgslFn(decodeHeightShader))]);
   const gradientJob = Fn(() => {
     const coord = uvec2(instanceIndex.mod(width), instanceIndex.div(width));
     const store = textureStore(
@@ -169,7 +169,7 @@ export function createTerrainCompute(
     if (disposed || failed || (!activeNormals && !activeSunlight)) {
       stats.state = failed ? "failed" : "disabled";
       updateStats();
-      return flags;
+      return;
     }
     if (!compiled) {
       stats.state = "compiling";
@@ -194,7 +194,7 @@ export function createTerrainCompute(
             if (disposed) release();
           });
       updateStats();
-      return flags;
+      return;
     }
     try {
       gradientQueue = sunQueue = 0;
@@ -222,7 +222,7 @@ export function createTerrainCompute(
         for (const i of order) {
           const b = i * HEIGHT_STRIDE,
             j = i * 4;
-          if (heights.bindings.data[b + 10] < 1 || heights.bindings.data[b] < 0.5) continue;
+          if (heights.bindings.data[b + PAIR.blend] < 1 || heights.bindings.data[b] < 0.5) continue;
           const key = `${instances.faces[i]}/${instances.faceUVs[j]}/${instances.faceUVs[j + 1]}/${instances.faceUVs[j + 2]}`;
           const entry = sunState.touch(key, heights.bindings.data, b);
           if (!entry) continue;
@@ -231,9 +231,9 @@ export function createTerrainCompute(
               sunBudget--;
               jobFace.value.fromArray(instances.faceUVs, j);
               jobRotation.value.fromArray(instances.rotations, i * 2);
-              jobLayers.value.fromArray(heights.bindings.data, b);
-              jobBest.value.fromArray(heights.bindings.data, b + 2);
-              jobParent.value.fromArray(heights.bindings.data, b + 6);
+              jobLayers.value.fromArray(heights.bindings.data, b + PAIR.layers);
+              jobBest.value.fromArray(heights.bindings.data, b + PAIR.best);
+              jobParent.value.fromArray(heights.bindings.data, b + PAIR.parent);
               destination.value.set(
                 (entry.slot % columns) * grid,
                 Math.floor(entry.slot / columns) * grid,
@@ -251,10 +251,10 @@ export function createTerrainCompute(
       if (activeNormals)
         for (let i = 0; i < instances.count; i++) {
           const b = i * HEIGHT_STRIDE,
-            slot = heights.bindings.data[b];
+            slot = heights.bindings.data[b + PAIR.layers];
           if (
             slot > 0 &&
-            heights.bindings.data[b + 10] >= 1 &&
+            heights.bindings.data[b + PAIR.blend] >= 1 &&
             versions[slot] > 0 &&
             versions[slot] === heights.slotVersions[slot]
           )
@@ -273,7 +273,6 @@ export function createTerrainCompute(
       report(error);
     }
     updateStats();
-    return flags;
   }
   return {
     gradients,
@@ -281,8 +280,6 @@ export function createTerrainCompute(
     columns,
     flags,
     stats,
-    gradientJob,
-    sunlightJob,
     prepare,
     dispose() {
       if (disposed) return;

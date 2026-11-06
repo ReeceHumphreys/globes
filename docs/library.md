@@ -93,11 +93,14 @@ at every zoom. `Graticule` picks its spacing from the camera's altitude unless g
 Texture: draw on a `CanvasTexture` and set `needsUpdate` for live data.
 `SurfaceOverlay` takes a function that returns a TSL vec4 for a `SurfacePoint`.
 
-`GeoJsonOverlay` takes a GeoJSON object or URL. Lines and polygon outlines are real
-lines: sharp and a constant width on screen. They ignore terrain
-height, so they drift from the ground in steep terrain seen up close. Polygon fills
-are painted on the surface at 10 km per pixel on Earth. Points are `GlobeLabel`s, so
-they need a CSS2DRenderer. One overlay has one style.
+`GeoJsonOverlay` takes a GeoJSON object or URL and reads all of RFC 7946. Lines and
+polygon outlines are real lines: sharp and a constant width on screen. A position's
+third value is its height above the ellipsoid, as the RFC defines it. Lines without
+one lie on the ellipsoid, so they drift from the ground in steep terrain seen up close.
+A step of more than 180° of longitude crosses the antimeridian, so data need not be
+cut there. Polygon fills are painted on the surface at 10 km per pixel on Earth, and
+ignore height. Points are `GlobeLabel`s, so they need a CSS2DRenderer; without a height
+they sit on the terrain. One overlay has one style.
 
 ```ts
 earth.add(new GeoJsonOverlay({ data: "/borders.geojson", color: "#fff", fill: "#f60" }));

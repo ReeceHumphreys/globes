@@ -9,5 +9,5 @@ fn sampleHeightLayer(heightTiles: texture_2d_array<f32>, uv: vec2<f32>, layer: f
   let c = textureLoad(heightTiles, vec2<i32>(base.x, next.y), i32(layer), 0).rg;
   let d = textureLoad(heightTiles, next, i32(layer), 0).rg;
   let packed = mix(mix(a,b,weight.x), mix(c,d,weight.x), weight.y);
-  return dot(packed, vec2<f32>(255.0,65280.0)) * 0.5 - 10000.0;
+  return decodeHeight(packed);
 }

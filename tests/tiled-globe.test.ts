@@ -30,9 +30,8 @@ const code = entry.code.replace(
   /from (["'])(three(?:\/[^"']*)?)\1/g,
   (_, quote, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`,
 );
-const { TiledGlobe, Atmosphere, EARTH_AIR, Graticule, ImageOverlay, GeoJsonOverlay } = await import(
-  `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
-);
+const { TiledGlobe, Atmosphere, Clouds, EARTH_AIR, Graticule, ImageOverlay, GeoJsonOverlay } =
+  await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
 
 const radius = 1737400;
 const renderer = {
@@ -149,6 +148,15 @@ test("labels sit on the surface and hide behind the horizon or behind the camera
   assert.ok(near.position.distanceTo(new Vector3(radius, 0, 0)) < 1e-6);
   assert.equal(near.visible, true);
   assert.equal(far.visible, false, "far side is behind the horizon");
+  near.altitude = 500;
+  near.altitudeReference = "ellipsoid";
+  globe.update(camera(radius * 3), renderer);
+  assert.ok(
+    near.position.distanceTo(new Vector3(radius + 500, 0, 0)) < 1e-6,
+    "above the ellipsoid",
+  );
+  near.altitude = 0;
+  near.altitudeReference = "terrain";
   const away = camera(radius * 3);
   away.lookAt(radius * 10, 0, 0);
   away.updateMatrixWorld(true);
@@ -166,9 +174,10 @@ test("an Atmosphere child is found by the globe and sized from its radius", asyn
   globe.update(camera(6_378_137 * 3), renderer);
   // The globe asked for its ground light, which builds the tables for this radius.
   assert.ok(Math.abs(air.scale.x - (6_378_137 + EARTH_AIR.height) * 1.01) < 1e-3);
-  const light = air.lightFor(6_378_137);
+  const view = { reversedDepth: true, bufferHeight: 600 };
+  const light = air.update(renderer, camera(6_378_137 * 3), view);
   assert.equal(light.transmittance.image.width, 256);
-  assert.equal(air.lightFor(6_378_137), light, "tables are built once per radius");
+  assert.equal(air.update(renderer, camera(6_378_137 * 3), view), light, "built once per radius");
   air.dispose();
   assert.equal(air.parent, null);
   globe.update(camera(6_378_137 * 3), renderer); // and the globe copes with its removal
@@ -224,6 +233,34 @@ test("GeoJSON lines are built on the globe's surface and cleaned up with the ove
   assert.equal(overlay.parent, null);
   globe.update(camera(radius * 3), renderer);
   globe.dispose();
+});
+
+test("clouds reach sky and terrain through one light, which the terrain does not own", async () => {
+  const globe = new TiledGlobe({ radius: 6_378_137, overview: overview() });
+  const air = new Atmosphere(EARTH_AIR);
+  const clouds = new Clouds({ map: "clouds.jpg" });
+  globe.add(air, clouds);
+  await globe.ready;
+  const view = { reversedDepth: true, bufferHeight: 600 };
+  const high = camera(6_378_137 * 3);
+  assert.equal(air.update(renderer, high, view).cloudStrength, 0, "no image yet, so no clouds");
+
+  clouds.map = Object.assign(new DataTexture(new Uint8Array(4), 1, 1), { image: { width: 1 } });
+  const light = air.update(renderer, high, view);
+  assert.equal(light.cloudMap, clouds.map);
+  assert.equal(light.cloudAltitude, clouds.altitude);
+  assert.equal(light.cloudStrength, 1);
+  assert.equal(air.update(renderer, camera(6_378_137 + 50_000), view).cloudStrength, 0, "faded");
+
+  globe.update(high, renderer);
+  let freed = 0;
+  light.transmittance.addEventListener("dispose", () => freed++);
+  light.skyLight.addEventListener("dispose", () => freed++);
+  clouds.map.addEventListener("dispose", () => freed++);
+  globe.dispose();
+  assert.equal(freed, 0, "they stay with the Atmosphere and Clouds");
+  air.dispose();
+  assert.equal(freed, 2);
 });
 
 test("graticule options are checked and an image overlay frees its texture", () => {

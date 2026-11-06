@@ -6,7 +6,7 @@ fn cachedSurfaceNormal(
   if(enabled<0.5) {return normalize(direction);}
   // Parent derivatives use a different stencil. Preserve the original function
   // until the displayed height has completely settled and this slot is baked.
-  if(transition<1.0 || layers.x<0.5 || u32(round(cacheFlags))/256u==0u) {
+  if(transition<1.0 || layers.x<0.5 || !gradientsBaked(cacheFlags)) {
     return surfaceNormal(heightTiles,direction,localUV,layers,bestUV,parentUV,transition,face,faceScale,radius,enabled);
   }
   let slope=textureSampleLevel(gradients,gradientSampler,bestUV.xy+localUV*bestUV.zw,i32(layers.x),0.0).rg*sign(bestUV.zw);

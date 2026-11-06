@@ -42,12 +42,15 @@ export interface ResidentTilesOptions<Payload, Extra> {
   coverGround?: boolean;
   /** Requests started elsewhere that share the four-request budget. */
   busy?(): number;
+  /** A tile has failed for good. Defaults to a console warning. */
+  onError?(error: unknown): void;
 }
 
 const MAX_IN_FLIGHT = 4;
 const MAX_ATTEMPTS = 3;
 const ROOT_PRIORITY = 1e20;
 const GROUND_PRIORITY = 1e18;
+export const DEFAULT_FADE_MS = 300;
 
 export const tileKey = (face: number, level: number, x: number, y: number) =>
   `${face}/${level}/${x}/${y}`;
@@ -56,7 +59,23 @@ export const tileKey = (face: number, level: number, x: number, y: number) =>
 export const instanceLevel = (instances: TileInstances, i: number) =>
   Math.round(-Math.log2(instances.faceUVs[i * 4 + 2]));
 
-function addressAt(face: number, level: number, u: number, v: number): TileAddress {
+/** Center of a drawn instance on its face. */
+export const instanceCenter = (instances: TileInstances, i: number): [number, number] => {
+  const j = i * 4;
+  return [
+    instances.faceUVs[j] + instances.faceUVs[j + 2] / 2,
+    instances.faceUVs[j + 1] + instances.faceUVs[j + 3] / 2,
+  ];
+};
+
+/** Eased 0..1 progress of a fade. One that has not started is 0, and a zero duration is 1. */
+export function fadeWeight(start: number | undefined, now: number, fadeMs: number): number {
+  if (start === undefined) return 0;
+  const t = fadeMs === 0 ? 1 : Math.min(1, Math.max(0, (now - start) / fadeMs));
+  return t * t * (3 - 2 * t);
+}
+
+export function addressAt(face: number, level: number, u: number, v: number): TileAddress {
   const n = 2 ** level;
   return {
     face,
@@ -76,6 +95,11 @@ function addressAt(face: number, level: number, u: number, v: number): TileAddre
  * four at a time, and gives up on a tile after three failures. `pair` returns
  * the finest resident tile at a point and the parent it is fading in over.
  */
+export const tileKeyAt = (face: number, level: number, u: number, v: number) => {
+  const { x, y } = addressAt(face, level, u, v);
+  return tileKey(face, level, x, y);
+};
+
 export function createResidentTiles<Payload, Extra extends object = object>(
   options: ResidentTilesOptions<Payload, Extra>,
 ) {
@@ -142,7 +166,8 @@ export function createResidentTiles<Payload, Extra extends object = object>(
         // Failures stick for the session; raise the cap if a longer outage should recover.
         if (tries < MAX_ATTEMPTS) return;
         failed.add(item.key);
-        console.warn(`[Globes] ${options.label} tile failed`, item.key, error);
+        const report = options.onError ?? console.warn;
+        report(new Error(`${options.label} tile ${item.key} failed`, { cause: error }));
       })
       .finally(() => {
         pending.delete(item.key);
@@ -204,13 +229,8 @@ export function createResidentTiles<Payload, Extra extends object = object>(
         ? facePoint(origin[0], origin[1], origin[2])
         : undefined;
     const centers = Array.from({ length: instances.count }, (_, i) => {
-      const j = i * 4;
-      return [
-        instances.faces[i],
-        instances.faceUVs[j] + instances.faceUVs[j + 2] / 2,
-        instances.faceUVs[j + 1] + instances.faceUVs[j + 3] / 2,
-        Math.min(maxLevel, instanceLevel(instances, i)),
-      ] as const;
+      const [u, v] = instanceCenter(instances, i);
+      return [instances.faces[i], u, v, Math.min(maxLevel, instanceLevel(instances, i))] as const;
     });
     const add = (face: number, level: number, u: number, v: number, priority: number) => {
       const tile = candidate(face, level, u, v, priority);
@@ -322,15 +342,26 @@ export function createResidentTiles<Payload, Extra extends object = object>(
         parent = best;
         best = record;
         if (activate) record.fadeStart ??= now;
-        const t =
-          record.fadeStart === undefined
-            ? 0
-            : fadeMs === 0
-              ? 1
-              : Math.min(1, Math.max(0, (now - record.fadeStart) / fadeMs));
-        blend = t * t * (3 - 2 * t);
+        blend = fadeWeight(record.fadeStart, now, fadeMs);
       }
       return { best, parent, blend };
+    },
+    /** Start the six roots' fades even off screen. Returns whether any is still fading. */
+    startRootFades() {
+      let fading = false;
+      for (let face = 0; face < 6; face++) {
+        const root = ready.get(tileKey(face, 0, 0, 0));
+        if (!root) continue;
+        root.fadeStart ??= now;
+        fading ||= now - root.fadeStart < fadeMs;
+      }
+      return fading;
+    },
+    /** Whether any resident tile is still fading in. */
+    fading() {
+      for (const { fadeStart } of ready.values())
+        if (fadeStart !== undefined && now - fadeStart < fadeMs) return true;
+      return false;
     },
     get: (key: string) => ready.get(key),
     resident: () => ready.values(),

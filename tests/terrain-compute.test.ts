@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { HEIGHT_STRIDE, PAIR, ROW_FLAGS, ROW_STRIDE } from "../src/rendering/binding-row.ts";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 import * as THREE from "three/webgpu";
@@ -36,9 +37,12 @@ function fixture(
     texture = new THREE.DataArrayTexture(new Uint8Array(width * width * 7 * 2), width, width, 7);
   texture.format = THREE.RGFormat;
   texture.type = THREE.UnsignedByteType;
-  const bindings = { data: new Float32Array(instances.capacity * 13) };
+  const bindings = { data: new Float32Array(instances.capacity * HEIGHT_STRIDE) };
   for (let i = 0; i < instances.count; i++)
-    bindings.data.set([1, 0, 0.1, 0.9, 0.8, -0.8, 0, 0, 0, 0, 1, instances.faces[i], 0], i * 13);
+    bindings.data.set(
+      [1, 0, 0.1, 0.9, 0.8, -0.8, 0, 0, 0, 0, 1, instances.faces[i], 0],
+      i * HEIGHT_STRIDE,
+    );
   let fading = false,
     revision = 1;
   const heights = {
@@ -57,20 +61,23 @@ function fixture(
     ),
     manifest: { tileSize: 16, gutter: 2, maxLevel: 4, minMeters: -100, maxMeters: 100 },
     needsFrame: () => fading,
+    update() {},
   };
+  const jobs: string[] = [],
+    errors: unknown[] = [],
+    compiled: THREE.ComputeNode[] = [];
+  let requests = 0;
   const layer = createTileLayer({
     radiusMeters: 1737400,
     segments: 32,
     instances,
     caches: options,
+    requestRender: () => requests++,
+    report: (error) => errors.push(error),
   });
   layer.setHeightTiles(heights);
-  layer.set({ layer: "terrain" });
-  layer.commit(instances);
-  const jobs: string[] = [],
-    errors: unknown[] = [],
-    compiled: THREE.ComputeNode[] = [];
-  let requests = 0;
+  layer.set({ layer: "terrain", elevation: true });
+  const sun = new THREE.Vector3(1, 0, 0);
   const renderer = {
     compileComputeAsync: async (nodes: THREE.ComputeNode[]) => {
       compiled.push(...nodes);
@@ -81,21 +88,26 @@ function fixture(
   };
   const view = { clipFromRelative: new THREE.Matrix4().elements, projectionScale: 800, now: 0 };
   const update = (now: number) => {
-    layer.prepareCaches(
+    layer.update({
       renderer,
-      now,
-      { ...view, now },
-      () => requests++,
-      (error) => errors.push(error),
-    );
-    layer.commitImagery(instances.count);
+      instances,
+      view: { ...view, now },
+      sun,
+      altitude: 1000,
+      overlays: [],
+      light: null,
+    });
   };
   const flags = () => {
     const buffer = layer.group.children[0].geometry.getAttribute("heightBlendFace").data;
-    return Array.from({ length: instances.count }, (_, i) => buffer.array[i * 25 + 24]);
+    return Array.from(
+      { length: instances.count },
+      (_, i) => buffer.array[i * ROW_STRIDE + ROW_FLAGS],
+    );
   };
   return {
     layer,
+    sun,
     heights,
     instances,
     jobs,
@@ -141,7 +153,7 @@ test("GPU caches compile lazily, bake within budgets, reuse camera-only frames, 
   f.instances.origin[0] += 100;
   f.update(30);
   assert.equal(f.jobs.length, baked, "camera motion must reuse static illumination");
-  f.layer.setSun(0, 1, 0);
+  f.sun.set(0, 1, 0);
   f.update(40);
   assert.ok(f.flags().every((v) => v === 256));
   f.update(50);
@@ -160,7 +172,8 @@ test("GPU caches compile lazily, bake within budgets, reuse camera-only frames, 
     "reused height slot must rebake gradients",
   );
   f.fade(true);
-  for (let i = 0; i < f.instances.count; i++) f.heights.bindings.data[i * 13 + 10] = 0.5;
+  for (let i = 0; i < f.instances.count; i++)
+    f.heights.bindings.data[i * HEIGHT_STRIDE + PAIR.blend] = 0.5;
   f.update(80);
   assert.ok(
     f.flags().every((v) => v === 0),

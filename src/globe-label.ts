@@ -14,10 +14,18 @@ export class GlobeLabel extends CSS2DObject {
   latitude: number;
   /** East-positive longitude, degrees. */
   longitude: number;
-  /** Meters above the displayed terrain. */
+  /** Meters above `altitudeReference`. */
   altitude: number;
+  /** What `altitude` is measured from. */
+  altitudeReference: "terrain" | "ellipsoid";
 
-  constructor(element: HTMLElement, latitude: number, longitude: number, altitude = 0) {
+  constructor(
+    element: HTMLElement,
+    latitude: number,
+    longitude: number,
+    altitude = 0,
+    altitudeReference: "terrain" | "ellipsoid" = "terrain",
+  ) {
     super(element);
     if (
       !Number.isFinite(latitude) ||
@@ -29,6 +37,7 @@ export class GlobeLabel extends CSS2DObject {
     this.latitude = latitude;
     this.longitude = longitude;
     this.altitude = altitude;
+    this.altitudeReference = altitudeReference;
     // Anchor the label's bottom center on the point.
     this.center.set(0.5, 1);
   }

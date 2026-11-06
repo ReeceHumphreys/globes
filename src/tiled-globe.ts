@@ -5,7 +5,11 @@ import { createSelectionView, VIEW } from "./tiles/lod.ts";
 import { selectAdaptiveTiles } from "./tiles/quadtree.ts";
 import { createTileProducer } from "./tile-producer.ts";
 import { createTileInstances, type TileInstances } from "./rendering/tile-instances.ts";
-import { createTileLayer, type SurfaceLayer } from "./rendering/tile-layer.ts";
+import {
+  createTileLayer,
+  type SurfaceLayer,
+  type TerrainSettings,
+} from "./rendering/tile-layer.ts";
 
 export type { SurfaceLayer };
 import { geographicToDirection } from "./geographic.ts";
@@ -17,8 +21,7 @@ import { loadRegionalCatalog } from "./imagery/regions.ts";
 import { loadHeightTiles } from "./elevation/tiles.ts";
 import { createHeightTileCache, type HeightTileCache } from "./elevation/tile-cache.ts";
 import type { GlobeLabel } from "./globe-label.ts";
-import type { Atmosphere, AtmosphereLight } from "./atmosphere/atmosphere.ts";
-import type { Clouds } from "./atmosphere/clouds.ts";
+import type { Atmosphere } from "./atmosphere/atmosphere.ts";
 import type { SurfaceOverlay } from "./overlay.ts";
 
 export interface TiledGlobeOptions {
@@ -84,8 +87,7 @@ export interface TiledGlobeEventMap extends THREE.Object3DEventMap {
   error: { error: unknown };
 }
 
-const _cameraPosition = new THREE.Vector3(),
-  _sphereCamera = new THREE.Vector3(),
+const _sphereCamera = new THREE.Vector3(),
   _normal = new THREE.Vector3(),
   _cameraQuaternion = new THREE.Quaternion(),
   _globeQuaternion = new THREE.Quaternion(),
@@ -259,15 +261,8 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
   }
 }
 
-type Settings = {
-  layer?: SurfaceLayer;
-  shading: boolean;
-  shadows: boolean;
-  shadowSteps: number;
-  hapke: boolean;
-  wireframe: boolean;
-  elevation: boolean;
-};
+// The display default depends on which data loads, so `layer` is chosen once loaded.
+type Settings = Omit<TerrainSettings, "layer"> & Partial<Pick<TerrainSettings, "layer">>;
 
 function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
   const radius = globe.radius;
@@ -313,12 +308,13 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     frustum = new THREE.Frustum(),
     projectionView = new THREE.Matrix4(),
     sun = new THREE.Vector3(),
-    cameraForward = new THREE.Vector3();
+    cameraForward = new THREE.Vector3(),
+    cameraPosition = new THREE.Vector3();
   function updateView(camera: THREE.PerspectiveCamera, reversedDepth: boolean, height: number) {
     camera.updateMatrixWorld(true);
     globe.updateMatrixWorld(true);
     // Selection runs in the globe's frame: camera position and rotation relative to it.
-    globe.worldToLocal(camera.getWorldPosition(_cameraPosition));
+    globe.worldToLocal(camera.getWorldPosition(cameraPosition));
     globe.getWorldQuaternion(_globeQuaternion).invert();
     relativeCamera.quaternion.multiplyQuaternions(
       _globeQuaternion,
@@ -334,7 +330,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     frustum.setFromProjectionMatrix(projectionView, THREE.WebGPUCoordinateSystem, reversedDepth);
     // Selection sees the sphere, with the camera at its height over the matching point.
     // That is exact beneath the camera and drifts with distance, by less than this.
-    toSphere(_cameraPosition, radius, flattening, _sphereCamera);
+    toSphere(cameraPosition, radius, flattening, _sphereCamera);
     const planeSlack = Math.min(
       radius * flattening,
       Math.max(0, _sphereCamera.length() - radius) * 0.02,
@@ -353,9 +349,6 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
   }
 
   let heightTiles: HeightTileCache | undefined;
-  let elevationEnabled = false;
-  let appliedAtmosphere: AtmosphereLight | null = null;
-  // The display default depends on which data loads, so it is chosen once loaded.
   const settings: Settings = {
     shading: true,
     shadows: true,
@@ -365,8 +358,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     elevation: true,
   };
   let previousQuery: Float64Array | undefined, previousInstances: TileInstances | undefined;
-  let previousRevision = -1,
-    previousBuffer: ArrayBuffer | undefined;
+  const shownHeights = () => (settings.elevation ? heightTiles : undefined);
   const stats: TiledGlobeStats = {
     tiles: 0,
     triangles: 0,
@@ -378,16 +370,15 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     elevationStatus: options.elevation ? "Waiting for imagery" : "No elevation configured",
   };
   const produce = createTileProducer(capacity, (tiles, query) =>
-    selectAdaptiveTiles(tiles, query, elevationEnabled ? heightTiles : undefined),
+    selectAdaptiveTiles(tiles, query, shownHeights()),
   );
   const heightAt = (x: number, y: number, z: number) =>
-    elevationEnabled && heightTiles ? heightTiles.sampleDirection(x, y, z) : 0;
+    shownHeights()?.sampleDirection(x, y, z) ?? 0;
   function updateElevationBounds() {
-    const field = heightTiles?.manifest;
+    const field = shownHeights()?.manifest;
     // The horizon test needs a sphere inside the surface, so it allows for the flattening.
-    view[VIEW.MinElevation] =
-      (elevationEnabled && field ? Math.min(0, field.minMeters) : 0) - radius * flattening;
-    view[VIEW.MaxElevation] = elevationEnabled && field ? Math.max(0, field.maxMeters) : 0;
+    view[VIEW.MinElevation] = (field ? Math.min(0, field.minMeters) : 0) - radius * flattening;
+    view[VIEW.MaxElevation] = field ? Math.max(0, field.maxMeters) : 0;
   }
 
   let overview: THREE.Texture | undefined,
@@ -443,6 +434,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
         changed,
         undefined,
         options.imagerySlots ?? 128,
+        { onError: report },
       );
     terrain = createTileLayer({
       radiusMeters: radius,
@@ -455,6 +447,8 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       waterMask,
       surfaceDetail: options.surfaceDetail,
       flattening,
+      requestRender: changed,
+      report,
     });
     // Picking goes through the globe's own raycast, not the instanced grid.
     terrain.group.traverse((object) => (object.raycast = () => {}));
@@ -499,6 +493,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       },
       undefined,
       options.heightSlots ?? 64,
+      { onError: report },
     );
     terrain.setHeightTiles(heightTiles);
     stats.elevationAvailable = true;
@@ -506,9 +501,8 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
   }
 
   function applyElevation() {
-    elevationEnabled = settings.elevation && stats.elevationAvailable;
     updateElevationBounds();
-    terrain?.set({ elevation: elevationEnabled });
+    terrain?.set({ elevation: settings.elevation });
     previousQuery = undefined;
   }
 
@@ -532,42 +526,28 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
   ) {
     if (signal.aborted || !terrain) return;
     heightTiles?.advance(now);
+    globe.sunDirection(sun);
+    const reversedDepth = renderer.reversedDepthBuffer === true || camera.reversedDepth;
+    updateView(camera, reversedDepth, bufferHeight);
     // An Atmosphere child colours the ground's sunlight and adds sky light. Found by
     // shape, not imported, so globes without one never load the atmosphere code.
     const atmosphere = globe.children.find(
       (child): child is Atmosphere => (child as Partial<Atmosphere>).isAtmosphere === true,
     );
-    const light = atmosphere?.lightFor(radius) ?? null;
-    if (light !== appliedAtmosphere) {
-      terrain.setAtmosphere(light);
-      appliedAtmosphere = light;
-    }
-    globe.sunDirection(sun);
-    terrain.setSun(sun.x, sun.y, sun.z);
-    updateView(camera, renderer.reversedDepthBuffer === true || camera.reversedDepth, bufferHeight);
-    atmosphere?.update(renderer, camera);
-    // The Atmosphere draws the layer, so without one there is nothing to cast its shadow.
-    const clouds = atmosphere
-      ? globe.children.find(
-          (child): child is Clouds => (child as Partial<Clouds>).isClouds === true,
-        )
-      : undefined;
-    const altitude = globe.altitudeOf(_cameraPosition);
-    terrain.setCameraAltitude(altitude);
+    const light = atmosphere?.update(renderer, camera, { reversedDepth, bufferHeight }) ?? null;
+    const altitude = globe.altitudeOf(cameraPosition);
     const overlays = globe.children.filter(
       (child): child is SurfaceOverlay =>
         (child as Partial<SurfaceOverlay>).isSurfaceOverlay === true,
     );
-    terrain.setOverlays(overlays);
     const overlayView = {
       altitude: Math.max(altitude, 0),
       radius,
       flattening,
       pixelRatio: renderer.getPixelRatio(),
-      camera: _cameraPosition,
+      camera: cameraPosition,
     };
     for (const overlay of overlays) overlay.update(overlayView);
-    terrain.setClouds(clouds?.map, clouds?.altitude ?? 0, clouds?.strengthAt(altitude) ?? 0);
     const started = performance.now();
     const viewChanged =
       previousInstances?.buffer.byteLength === 0 ||
@@ -579,20 +559,19 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       previousInstances = instances;
     }
     stats.selectionMs = performance.now() - started;
-    if (instances.revision !== previousRevision || instances.buffer !== previousBuffer) {
-      terrain.commit(instances);
-      previousRevision = instances.revision;
-      previousBuffer = instances.buffer;
-    }
-    const streamingView = {
-      clipFromRelative: projectionView.elements,
-      projectionScale: view[VIEW.ProjectionScale],
-      now,
-    };
-    imagery?.update(instances, streamingView);
-    heightTiles?.update(instances, streamingView);
-    terrain.prepareCaches(renderer, now, streamingView, changed, report);
-    terrain.commitImagery(instances.count);
+    terrain.update({
+      renderer,
+      instances,
+      view: {
+        clipFromRelative: projectionView.elements,
+        projectionScale: view[VIEW.ProjectionScale],
+        now,
+      },
+      sun,
+      altitude,
+      overlays,
+      light,
+    });
     stats.terrainCaches = terrain.cacheStats();
     stats.tiles = instances.count;
     stats.triangles = instances.count * segments * segments * 2;
@@ -615,9 +594,14 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     for (const child of object.children) {
       if ((child as GlobeLabel).isGlobeLabel) {
         const label = child as GlobeLabel;
-        globe.positionAt(label.latitude, label.longitude, label.altitude, label.position);
+        const { latitude, longitude, altitude } = label;
+        const ground =
+          label.altitudeReference === "ellipsoid"
+            ? globe.heightAt(geographicToDirection(latitude, longitude, labelPoint))
+            : 0;
+        globe.positionAt(latitude, longitude, altitude - ground, label.position);
         labelPoint.copy(label.position).normalize();
-        const toCamera = _toward.copy(_cameraPosition).sub(label.position);
+        const toCamera = _toward.copy(cameraPosition).sub(label.position);
         label.visible =
           labelPoint.dot(toCamera) > 0 && // above the horizon
           toCamera.dot(cameraForward) < 0; // in front of the camera

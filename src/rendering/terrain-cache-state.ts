@@ -1,3 +1,5 @@
+import { HEIGHT_RANGE, MAX_SUNLIGHT_SLOTS } from "./binding-row.ts";
+
 /** CPU ownership only. GPU resources and compute dispatch stay in terrain-compute.ts. */
 export interface TerrainCacheOptions {
   /** Bounded geometry-patch slots, independent of height residency. */
@@ -18,15 +20,13 @@ export function terrainCacheSettings(options: TerrainCacheOptions = {}) {
     if (
       !Number.isInteger(result[key]) ||
       result[key] < 1 ||
-      result[key] > (key === "sunlightSlots" ? 255 : 64)
+      result[key] > (key === "sunlightSlots" ? MAX_SUNLIGHT_SLOTS : 64)
     )
       throw new RangeError(`Invalid terrain cache ${key}`);
   if (!Number.isFinite(result.settleMs) || result.settleMs < 0 || result.settleMs > 10000)
     throw new RangeError("Invalid terrain cache settleMs");
   return result;
 }
-export const GRADIENT_READY_BIT = 256;
-export const RENDER_BINDING_STRIDE = 25; // 11 imagery + 13 height + one packed cache flag
 export interface SunlightEntry {
   readonly slot: number;
   readonly signature: Float32Array;
@@ -37,13 +37,13 @@ export interface SunlightEntry {
 /** Entries are usable only in the current global height/Sun epoch. No hash collisions. */
 export function createSunlightCacheState(capacity: number) {
   const entries = new Map<string, SunlightEntry>();
-  const signatures = new Float32Array(capacity * 12);
+  const signatures = new Float32Array(capacity * HEIGHT_RANGE);
   const pool = Array.from({ length: capacity }, (_, slot): SunlightEntry => ({
     slot,
     key: "",
     used: -1,
     ready: false,
-    signature: signatures.subarray(slot * 12, (slot + 1) * 12),
+    signature: signatures.subarray(slot * HEIGHT_RANGE, (slot + 1) * HEIGHT_RANGE),
   }));
   let frame = 0,
     epoch: string | undefined,
@@ -82,10 +82,10 @@ export function createSunlightCacheState(capacity: number) {
         entries.set(key, entry);
       }
       entry.used = frame;
-      for (let j = 0; j < 12; j++)
+      for (let j = 0; j < HEIGHT_RANGE; j++)
         if (entry.signature[j] !== signature[offset + j]) {
           entry.ready = false;
-          for (let k = 0; k < 12; k++) entry.signature[k] = signature[offset + k];
+          for (let k = 0; k < HEIGHT_RANGE; k++) entry.signature[k] = signature[offset + k];
           break;
         }
       return entry;

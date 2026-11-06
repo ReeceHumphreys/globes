@@ -110,8 +110,9 @@ async function show(id: BodyId) {
     surfaceDetail: id === "moon",
   });
   globe.addEventListener("error", ({ error }) => console.warn(`[${body.name}]`, error));
-  if (id === "earth") globe.add(new Atmosphere(EARTH_AIR));
-  if (id === "mars") globe.add(new Atmosphere(MARS_AIR));
+  const air = id === "earth" ? EARTH_AIR : id === "mars" ? MARS_AIR : undefined;
+  const atmosphere = air && new Atmosphere(air);
+  if (atmosphere) globe.add(atmosphere);
   scene.add(globe);
   camera.position.set(body.radiusMeters * 3, 0, 0);
   const controls = new GlobeControls(camera, renderer.domElement, globe);
@@ -121,6 +122,7 @@ async function show(id: BodyId) {
   setSun(subsolar.longitudeDeg, subsolar.latitudeDeg);
 
   const extras: { update(): void; dispose(): void }[] = [];
+  if (atmosphere) extras.push({ update() {}, dispose: () => atmosphere.dispose() });
   const places: Shown["places"] = [];
   const labelGroups: Shown["labelGroups"] = [];
   const grid = new Graticule({

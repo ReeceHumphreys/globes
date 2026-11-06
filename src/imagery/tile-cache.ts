@@ -5,12 +5,17 @@ import type { TileInstances } from "../rendering/tile-instances.ts";
 import { screenImportance, cameraFaceUV, type StreamingView } from "./priority.ts";
 import { parseRegionalCatalog, type RegionalCatalog } from "./regions.ts";
 import { faceToWorld, facePoint } from "../tiles/roots.ts";
-import { createResidentTiles, instanceLevel, tileKey } from "../tiles/resident-tiles.ts";
+import {
+  addressAt,
+  createResidentTiles,
+  DEFAULT_FADE_MS,
+  instanceCenter,
+  instanceLevel,
+  tileKey,
+} from "../tiles/resident-tiles.ts";
+import { IMAGERY_STRIDE, writeTilePair } from "../rendering/binding-row.ts";
 
-export const IMAGERY_STRIDE = 11;
 export interface ImageryBindings {
-  revision: number;
-  // layers.xy, bestUV.xyzw, parentUV.xyzw, blend. ONE instance buffer.
   data: Float32Array;
 }
 export type TilePixelsLoader = (url: string, signal: AbortSignal) => Promise<Uint8Array>;
@@ -40,7 +45,7 @@ export function createImageryCache(
   onChange: () => void,
   load?: TilePixelsLoader,
   residentLimit = 128,
-  options: { fadeMs?: number; prefetchLimit?: number } = {},
+  options: { fadeMs?: number; prefetchLimit?: number; onError?(error: unknown): void } = {},
 ) {
   const pixelsLoader =
     (bytes: TileBytesLoader): TilePixelsLoader =>
@@ -62,7 +67,6 @@ export function createImageryCache(
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
   const bindings: ImageryBindings = {
-    revision: 0,
     data: new Float32Array(terrainCapacity * IMAGERY_STRIDE),
   };
   const tiles = createResidentTiles({
@@ -93,7 +97,9 @@ export function createImageryCache(
       return {};
     },
     onChange,
+    onError: options.onError,
   });
+  const texels = { scale: manifest.textureUV.scale, offset: manifest.textureUV.offset };
   let disposed = false,
     animating = false;
   let previousOrigin: number[] | undefined,
@@ -104,28 +110,6 @@ export function createImageryCache(
     dz = 0,
     zooming = false;
   const edge = new Float64Array(3);
-  type Resident = NonNullable<ReturnType<typeof tiles.get>>;
-  function writeUV(
-    i: number,
-    image: Resident | undefined,
-    instances: TileInstances,
-    offset: number,
-  ) {
-    const j = i * IMAGERY_STRIDE + offset,
-      source = i * 4,
-      target = bindings.data;
-    if (!image) {
-      target.fill(0, j, j + 4);
-      return;
-    }
-    const n = 2 ** image.level,
-      s = manifest.textureUV.scale,
-      p = manifest.textureUV.offset;
-    target[j] = p + (instances.faceUVs[source] * n - image.x) * s;
-    target[j + 1] = p + (instances.faceUVs[source + 1] * n - image.y) * s;
-    target[j + 2] = instances.faceUVs[source + 2] * n * s;
-    target[j + 3] = instances.faceUVs[source + 3] * n * s;
-  }
   // Returns whether the camera is still inside the recent-motion window.
   function trackMotion(
     origin: Float64Array,
@@ -167,9 +151,7 @@ export function createImageryCache(
     if (x < 0 || y < 0 || x >= n || y >= n) {
       faceToWorld(face, (x + 0.5) / n - 0.5, (y + 0.5) / n - 0.5, 0.5, edge);
       const [f, u, v] = facePoint(edge[0], edge[1], edge[2]);
-      face = f;
-      x = Math.min(n - 1, Math.max(0, Math.floor(u * n)));
-      y = Math.min(n - 1, Math.max(0, Math.floor(v * n)));
+      ({ face, x, y } = addressAt(f, level, u, v));
     }
     tiles.prefetch(face, level, x, y, priority);
   }
@@ -211,21 +193,16 @@ export function createImageryCache(
   }
   function writeBindings(instances: TileInstances): void {
     for (let i = 0; i < instances.count; i++) {
-      const j = i * 4;
-      const { best, parent, blend } = tiles.pair(
+      const [u, v] = instanceCenter(instances, i);
+      const pair = tiles.pair(
         instances.faces[i],
         Math.min(imageryMaxLevel, instanceLevel(instances, i)),
-        instances.faceUVs[j] + instances.faceUVs[j + 2] / 2,
-        instances.faceUVs[j + 1] + instances.faceUVs[j + 3] / 2,
+        u,
+        v,
         true,
       );
-      animating ||= best !== undefined && blend < 1;
-      const row = i * IMAGERY_STRIDE;
-      bindings.data[row] = best?.slot ?? 0;
-      bindings.data[row + 1] = parent?.slot ?? 0;
-      writeUV(i, best, instances, 2);
-      writeUV(i, parent, instances, 6);
-      bindings.data[row + 10] = blend;
+      animating ||= pair.best !== undefined && pair.blend < 1;
+      writeTilePair(bindings.data, i * IMAGERY_STRIDE, pair, instances, i, texels);
     }
   }
   function update(instances: TileInstances, view?: StreamingView): void {
@@ -234,7 +211,7 @@ export function createImageryCache(
       throw new RangeError("Imagery terrain capacity exceeded.");
     animating = false;
     const now = view?.now ?? performance.now();
-    tiles.setClock(now, view ? Math.max(0, options.fadeMs ?? 250) : 0);
+    tiles.setClock(now, view ? Math.max(0, options.fadeMs ?? DEFAULT_FADE_MS) : 0);
     const priorities = Array.from({ length: instances.count }, (_, i) =>
       screenImportance(instances, i, view),
     );
@@ -246,7 +223,6 @@ export function createImageryCache(
     const moving = trackMotion(instances.origin, view, now);
     if (view && spare > 0) prefetchAround(instances, priorities, spare, moving);
     writeBindings(instances);
-    bindings.revision++;
     tiles.pump();
   }
   return {

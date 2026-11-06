@@ -58,9 +58,14 @@ export class SurfaceOverlay extends THREE.Object3D {
     this.opacity = opacity;
   }
 
+  /** Straight colour and alpha at a surface point, before `opacity`. @internal */
+  paint(surface: SurfacePoint): THREE.Node<"vec4"> {
+    return this.#shader(surface);
+  }
+
   /** This overlay over what is already on the surface. @internal */
   over(color: THREE.Node<"vec3">, surface: SurfacePoint): THREE.Node<"vec3"> {
-    const paint = this.#shader(surface);
+    const paint = this.paint(surface);
     return mix(color, paint.rgb, paint.a.mul(this.strength)) as THREE.Node<"vec3">;
   }
 

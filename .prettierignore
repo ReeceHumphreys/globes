@@ -1,6 +1,7 @@
 node_modules
 dist
-/public
+/docs
+examples/viewer/public
 /data
 /.toolchains
 /native

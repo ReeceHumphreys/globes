@@ -4,7 +4,9 @@ import { HEIGHT_RANGE, MAX_SUNLIGHT_SLOTS } from "./binding-row.ts";
 export interface TerrainCacheOptions {
   /** Bounded geometry-patch slots, independent of height residency. */
   sunlightSlots?: number;
+  /** Height tiles to derive normals for each frame. */
   gradientTilesPerFrame?: number;
+  /** Patches to bake sunlight for each frame. */
   sunlightTilesPerFrame?: number;
   /** Quiet period before baking sunlight after an input change. */
   settleMs?: number;

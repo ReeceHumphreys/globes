@@ -24,6 +24,7 @@ import type { GlobeLabel } from "./globe-label.ts";
 import type { Atmosphere } from "./atmosphere/atmosphere.ts";
 import type { SurfaceOverlay } from "./overlay.ts";
 
+/** What to build a {@link TiledGlobe} from. Every dataset is optional. */
 export interface TiledGlobeOptions {
   /** Equatorial radius in meters (the globe's local units). */
   radius: number;
@@ -34,7 +35,10 @@ export interface TiledGlobeOptions {
   flattening?: number;
   /** Body name. When set, manifests published for another body are rejected. */
   name?: string;
-  /** Equirectangular sRGB overview. A supplied texture transfers ownership. */
+  /**
+   * Equirectangular sRGB overview, drawn where tiled imagery has not loaded. Without
+   * either the terrain is neutral. A supplied texture transfers ownership.
+   */
   overview?: string | THREE.Texture;
   /** Equirectangular sRGB night lights. A supplied texture transfers ownership. */
   nightLights?: string | THREE.Texture;
@@ -43,7 +47,7 @@ export interface TiledGlobeOptions {
    * row first. Water gets sun glint and reflected sky. A texture transfers ownership.
    */
   waterMask?: string | THREE.Texture;
-  /** Imagery tile manifest URL. */
+  /** Imagery tile manifest URL. Like all URLs here, it resolves against `document.baseURI`. */
   imagery?: string;
   /** Sparse regional imagery catalog URL. */
   regions?: string;
@@ -55,36 +59,57 @@ export interface TiledGlobeOptions {
    * Defaults to a fixed direction.
    */
   sun?: THREE.DirectionalLight | THREE.PointLight | null;
-  /** Lunar-style Hapke reflectance instead of Lambert. */
+  /** Lunar-style Hapke reflectance instead of Lambert. An illustrative preset, not a fitted one. */
   hapke?: boolean;
   /** Ground-locked grain where resident imagery is magnified past its texels. */
   surfaceDetail?: boolean;
+  /** Grid cells along a tile's edge, 2 to 128. Defaults to 32. */
   gridSegments?: number;
+  /** Most tiles drawn at once, 6 to 65536. Defaults to 2048. */
   tileCapacity?: number;
+  /** Deepest quadtree level, up to 20. Defaults to 20. */
   maxLevel?: number;
+  /** Refine a tile until its grid cells are this many pixels across. Defaults to 12. */
   maxCellPixels?: number;
+  /** Resident imagery tiles, 6 to 255. This bounds GPU memory at any depth. Defaults to 128. */
   imagerySlots?: number;
+  /** Resident height tiles, 6 to 255. Defaults to 64. */
   heightSlots?: number;
+  /** Budgets for the terrain's derived GPU caches. */
   caches?: TerrainCacheOptions;
 }
 
+/** What the globe drew last frame, much like `renderer.info`. */
 export interface TiledGlobeStats {
+  /** Tiles drawn. */
   tiles: number;
+  /** Triangles drawn. */
   triangles: number;
+  /** Finest quadtree level drawn. */
   deepestLevel: number;
+  /** CPU time spent selecting tiles. */
   selectionMs: number;
+  /** Tiled imagery loaded its manifest. */
   imageryAvailable: boolean;
+  /** Tiled elevation loaded its manifest. */
   elevationAvailable: boolean;
+  /** Imagery state, for display. */
   imageryStatus: string;
+  /** Elevation state, for display. */
   elevationStatus: string;
+  /** Derived GPU caches, once elevation has loaded. */
   terrainCaches?: Readonly<TerrainCacheStats>;
 }
 
+/** Events a {@link TiledGlobe} dispatches. */
 export interface TiledGlobeEventMap extends THREE.Object3DEventMap {
-  /** Streaming or a fade needs another frame; render again. */
+  /** Streaming, a fade or a setting needs another frame; render again. */
   change: object;
-  /** A non-fatal load failure. Without a listener it is logged. */
-  error: { error: unknown };
+  /** A failed download or GPU job. Never fatal. Without a listener it is logged. */
+  error: {
+    /** What went wrong. */
+    error: unknown;
+  };
 }
 
 const _sphereCamera = new THREE.Vector3(),
@@ -99,22 +124,48 @@ const _sphereCamera = new THREE.Vector3(),
   _target = new THREE.Vector3();
 
 /**
- * A spherical body with streamed, tiled imagery and elevation.
+ * A planetary body with streamed, tiled imagery and elevation.
  *
- * Add it to a scene like any Object3D. Its local frame is body-fixed: +Y north,
- * +X longitude zero, −Z longitude 90° east, in meters. Children ride the surface.
- * Call `update(camera, renderer)` once per frame before rendering; listen for
- * `change` to render on demand while tiles stream in.
+ * Add it to a scene like any Object3D, and call `update(camera, renderer)` once per frame
+ * before rendering. Loading starts in the constructor. Listen for `change` to render on
+ * demand while tiles stream in. Failures are non-fatal: see {@link TiledGlobeEventMap}.
+ *
+ * Its local frame is body-fixed: +Y north, +X longitude zero, −Z longitude 90° east, in
+ * meters. Children ride the surface. Move or rotate it freely, but keep it unscaled.
+ *
+ * Add an {@link Atmosphere}, {@link Clouds}, overlays and {@link GlobeLabel}s as children.
+ * The globe drives them, but each that has `dispose()` is yours to dispose.
+ *
+ * @example
+ * ```ts
+ * const moon = new TiledGlobe({
+ *   name: "Moon",
+ *   radius: 1_737_400,
+ *   overview: "/moon-2k.jpg",
+ *   imagery: "/data/moon/wac/manifest.json",
+ *   elevation: "/data/moon/elevation-tiles/manifest.json",
+ *   sun: directionalLight,
+ *   hapke: true,
+ * });
+ * scene.add(moon);
+ * ```
  */
 export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
+  /** @internal */
   readonly isTiledGlobe = true;
   override readonly type = "TiledGlobe";
+  /** Equatorial radius in meters. */
   readonly radius: number;
+  /**
+   * Polar flattening; 0 is a sphere. On a flattened globe a point's direction from the
+   * center is not its surface normal, so use {@link normalAt}.
+   */
   readonly flattening: number;
   /** Light whose direction shades the terrain. */
   sun: THREE.DirectionalLight | THREE.PointLight | null;
+  /** What was drawn last frame. */
   readonly stats: TiledGlobeStats;
-  /** Settles after the initial imagery and elevation setup, or its reported failure. */
+  /** Settles after initial imagery and elevation setup, or its reported failure. Tiles keep streaming. */
   readonly ready: Promise<void>;
   #terrain: ReturnType<typeof createTerrain>;
 
@@ -168,6 +219,7 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
   set hapke(value: boolean) {
     this.#terrain.set({ hapke: value });
   }
+  /** Draw the tile grid. */
   get wireframe() {
     return this.#terrain.settings.wireframe;
   }
@@ -188,12 +240,12 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     this.#terrain.update(camera, renderer, height, performance.now());
   }
 
-  /** Displayed terrain height, in meters above the ellipsoid, at a surface normal. */
+  /** Displayed terrain height, in meters above the ellipsoid, at a surface normal. Not a position: see {@link normalAt}. */
   heightAt(direction: THREE.Vector3): number {
     return this.#terrain.heightAt(direction.x, direction.y, direction.z);
   }
 
-  /** Point at a geographic position, in the globe's local frame. */
+  /** Point on the displayed terrain, plus `altitude`, in the globe's local frame. */
   positionAt(
     latitudeDeg: number,
     longitudeDeg: number,
@@ -217,7 +269,7 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     return altitudeOf(point, this.radius, this.flattening);
   }
 
-  /** Intersects the displayed surface. Children are not tested. */
+  /** Intersects the displayed surface, so `raycaster.intersectObject(globe)` works. Children are not tested. */
   override raycast(raycaster: THREE.Raycaster, intersects: THREE.Intersection[]): void {
     _inverse.copy(this.matrixWorld).invert();
     _ray.copy(raycaster.ray).applyMatrix4(_inverse);

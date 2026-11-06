@@ -40,7 +40,10 @@ export async function fetchTileBytes(url: string, signal: AbortSignal): Promise<
   return new Uint8Array(await response.arrayBuffer());
 }
 
-/** Keep legacy virtual tile URLs inside the cache; resolve their bytes here. */
+/**
+ * A function that fetches one tile's bytes by the URL its manifest gives, from plain files
+ * or, with `storage`, from the manifest's PMTiles archives.
+ */
 export function createTileBytesLoader(
   storage: PMTilesStorage | undefined,
   manifestURL: string,

@@ -1,22 +1,38 @@
 {
   "name": "tiled-globe",
   "version": "0.1.0",
+  "description": "Spherical tiled globe rendering and streaming for Three.js WebGPU",
+  "license": "MIT",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "data:ocean-mask": "node scripts/ocean-mask.ts",
-    "data:usa-coastline": "node scripts/usa-coastline.ts",
-    "dev": "vite",
-    "build": "npm run typecheck && npm run build:lib && npm run build:example",
-    "format": "prettier --write .",
-    "typecheck": "tsc --noEmit",
+    "build": "vite build && tsc -p tsconfig.lib.json",
     "test": "node --test tests/*.test.ts",
-    "test:gpu": "node --test tests/gpu/*.test.ts",
-    "preview": "vite preview",
-    "build:lib": "vite build --config vite.lib.config.ts && tsc -p tsconfig.lib.json",
-    "build:example": "vite build",
-    "prepack": "npm run build:lib",
-    "benchmark:terrain:prepare": "node scripts/prepare-terrain-benchmark.ts",
-    "benchmark:render": "node scripts/benchmark-render.ts"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p examples/viewer",
+    "format": "prettier --write .",
+    "docs": "npx -y -p typescript@6.0 -p typedoc@0.28.20 typedoc",
+    "prepack": "npm run build",
+    "dev": "vite examples/viewer",
+    "build:example": "vite build examples/viewer",
+    "preview": "vite preview examples/viewer",
+    "data:ocean-mask": "node examples/viewer/scripts/ocean-mask.ts",
+    "data:usa-coastline": "node examples/viewer/scripts/usa-coastline.ts"
+  },
+  "dependencies": {
+    "pmtiles": "4.5.0"
+  },
+  "peerDependencies": {
+    "three": ">=0.186.0 <0.187.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
@@ -25,27 +41,5 @@
     "three": "^0.186.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
-  },
-  "description": "Spherical tiled globe rendering and streaming for Three.js WebGPU",
-  "license": "MIT",
-  "exports": {
-    ".": {
-      "types": "./dist/library/types/index.d.ts",
-      "import": "./dist/library/index.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "types": "./dist/library/types/index.d.ts",
-  "module": "./dist/library/index.js",
-  "files": [
-    "dist/library",
-    "docs",
-    "examples/moon/README.md"
-  ],
-  "peerDependencies": {
-    "three": ">=0.186.0 <0.187.0"
-  },
-  "dependencies": {
-    "pmtiles": "4.5.0"
   }
 }

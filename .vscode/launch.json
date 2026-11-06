@@ -6,7 +6,7 @@
       "type": "editor-browser",
       "request": "launch",
       "url": "http://localhost:5173",
-      "webRoot": "${workspaceFolder}",
+      "webRoot": "${workspaceFolder}/examples/viewer",
       "internalConsoleOptions": "openOnSessionStart"
     }
   ]

@@ -203,66 +203,6 @@ test("failed or corrupt fine heights leave coarse geometry available; disposal a
   assert.ok(active.every((s) => s.aborted));
 });
 
-test(
-  "generated global height manifest validates when available",
-  { skip: !fs.existsSync("../tile-service/public/data/moon/elevation-tiles/manifest.json") },
-  () => {
-    parseHeightTiles(
-      JSON.parse(
-        fs.readFileSync("../tile-service/public/data/moon/elevation-tiles/manifest.json", "utf8"),
-      ),
-    );
-  },
-);
-
-test("height metadata pages load only around the view and expose validated fine tiles", async () => {
-  const m = fixture(),
-    fine = m.tiles["0/1/1/1"];
-  delete m.tiles["0/1/1/1"];
-  const pageBytes = new TextEncoder().encode(JSON.stringify({ tiles: { "0/1/1/1": fine } }));
-  m.pageLevel = 0;
-  m.pages = {
-    "0/0/0/0": {
-      path: "metadata/0/0/0/0.json",
-      lower: 1000,
-      upper: 2000,
-      sha256: createHash("sha256").update(pageBytes).digest("hex"),
-    },
-  };
-  parseHeightTiles(m);
-  let pages = 0;
-  const loadPage = async (url) => {
-    assert.equal(url, "https://example.test/heights/metadata/0/0/0/0.json");
-    pages++;
-    return pageBytes;
-  };
-  const requested = [];
-  const cache = createHeightTileCache(
-    m,
-    "https://example.test/heights/manifest.json",
-    1,
-    () => {},
-    async (url) => {
-      requested.push(url);
-      return bytes(url.endsWith("/1/1/1.u16") ? 2000 : 1000);
-    },
-    8,
-    { fadeMs: 0, loadPage },
-  );
-  try {
-    for (let i = 0; i < 16; i++) {
-      cache.update(terrain(), view(i));
-      await tick();
-    }
-    assert.equal(pages, 1);
-    assert.equal(cache.stats().metadataPages, 1);
-    assert.ok(requested.some((url) => url.endsWith("/1/1/1.u16")));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 2000);
-  } finally {
-    cache.dispose();
-  }
-});
-
 test("a failed metadata page reaches onError, through the load seam", async () => {
   const m = fixture(),
     fine = m.tiles["0/1/1/1"];

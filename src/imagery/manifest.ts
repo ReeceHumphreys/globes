@@ -105,6 +105,10 @@ export function parseImageryManifest(value: unknown, expectedBody?: GlobeBody): 
 /** A generated dataset is absent (including SPA servers returning index.html). */
 export class MissingImageryManifestError extends Error {}
 
+/**
+ * Fetch and validate an imagery manifest. Rejects if it is missing, malformed, or
+ * published for a body other than `expectedBody`.
+ */
 export async function loadImageryManifest(
   url: string,
   expectedBody?: GlobeBody,

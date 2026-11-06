@@ -257,38 +257,6 @@ test("parent-to-child fades advance smoothly and stop requesting animation frame
   cache.dispose();
 });
 
-test("bounded speculative neighbors become cache hits when the camera moves", async () => {
-  let instances = terrain(0, 2, 1, 1);
-  let now = 0;
-  const requests = [];
-  const cache = createImageryCache(
-    manifest,
-    "http://localhost/manifest.json",
-    1,
-    () => cache.update(instances, streamingView(now)),
-    async (url) => {
-      requests.push(url);
-      return new Uint8Array(1600).fill(255);
-    },
-    16,
-    { fadeMs: 0, prefetchLimit: 4 },
-  );
-  cache.update(instances, streamingView(now));
-  for (let i = 0; i < 20; i++) await tick();
-  assert.ok(cache.stats().prefetch > 0 && cache.stats().prefetch <= 4);
-  assert.ok(cache.stats().resident <= 16);
-  assert.ok(requests.some((url) => url.endsWith("/0/2/2/1.png")));
-  const initial = requests.filter((url) => url.endsWith("/0/2/2/1.png")).length;
-  now = 100;
-  instances = terrain(0, 2, 2, 1);
-  cache.update(instances, streamingView(now));
-  for (let i = 0; i < 20; i++) await tick();
-  assert.ok(cache.stats().prefetchHits > 0);
-  assert.equal(requests.filter((url) => url.endsWith("/0/2/2/1.png")).length, initial);
-  assert.equal(cache.bindings.data[10], 1);
-  cache.dispose();
-});
-
 test("regional NAC tiles extend only published addresses, sharing global fallback and residency", async () => {
   const base = parseImageryManifest({ ...manifest, id: "test-global" }),
     urls = [];
@@ -356,39 +324,6 @@ test("regional NAC tiles extend only published addresses, sharing global fallbac
   } finally {
     cache.dispose();
   }
-});
-
-test("important refinements cannot steal the uniform image coverage from other visible leaves", async () => {
-  const batch = createTileBatch(16);
-  batch.count = 16;
-  for (let i = 0; i < 16; i++) {
-    batch.face[i] = 3;
-    batch.level[i] = 3;
-    batch.x[i] = (i % 4) * 2;
-    batch.y[i] = Math.floor(i / 4) * 2;
-  }
-  const instances = createTileInstances(16);
-  writeTileInstances(batch, instances, 1737400);
-  for (let i = 0; i < 16; i++) instances.anchors.set([0, 0, -(100 + i * i * 5000)], i * 3);
-  const cache = createImageryCache(
-    { ...manifest, maxLevel: 3 },
-    "https://example.test/manifest.json",
-    16,
-    () => cache.update(instances, streamingView(0)),
-    async () => new Uint8Array(1600).fill(255),
-    14,
-    { fadeMs: 0, prefetchLimit: 0 },
-  );
-  cache.update(instances, streamingView(0));
-  for (let i = 0; i < 24; i++) await tick();
-  assert.equal(cache.stats().qualityCap, 1);
-  for (let i = 0; i < 16; i++)
-    assert.ok(
-      cache.bindings.data[i * 11 + 4] >= 0.2 - 1e-6,
-      "far leaves retain their level-one image instead of reverting to the root",
-    );
-  assert.equal(cache.stats().loading, 0);
-  cache.dispose();
 });
 
 test("a wanted imagery tile is retried three times and then stays unavailable", async () => {

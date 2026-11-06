@@ -8,10 +8,7 @@
     "types": ["vite/client", "node"],
     "strict": true,
     "skipLibCheck": true,
-    "noEmit": true,
-    "paths": {
-      "tiled-globe": ["./src/index.ts"]
-    }
+    "noEmit": true
   },
-  "include": ["src", "examples", "vite.config.ts", "vite.lib.config.ts", "benchmarks"]
+  "include": ["src", "vite.config.ts"]
 }

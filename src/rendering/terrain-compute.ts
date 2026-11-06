@@ -14,13 +14,21 @@ import {
 } from "./terrain-cache-state.ts";
 
 type FunctionNode = ReturnType<typeof wgslFn>;
+/** The terrain's derived GPU caches, which save per-pixel work. */
 export interface TerrainCacheStats {
+  /** Height tiles with baked normals. */
   gradientReady: number;
+  /** Height tiles that could have baked normals. */
   gradientSlots: number;
+  /** Patches with baked sunlight. */
   sunlightReady: number;
+  /** Patches that could have baked sunlight. */
   sunlightSlots: number;
+  /** Tiles drawn with the direct shader path this frame. */
   fallbackTiles: number;
+  /** GPU memory held. */
   bytes: number;
+  /** What the caches are doing. */
   state: "disabled" | "compiling" | "ready" | "warming" | "settling" | "failed";
 }
 export interface TerrainComputeNodes {
@@ -260,7 +268,7 @@ export function createTerrainCompute(
           )
             flags[i] += GRADIENT_READY_BIT;
         }
-      // Warm caches on demanded frames; do not animate an otherwise idle viewer
+      // Warm caches on demanded frames; do not animate an otherwise idle app
       // solely to fill optional caches. Direct calculations cover remaining work.
       if ((gradientQueue || sunQueue) && stats.state === "ready") stats.state = "warming";
       if (activeSunlight && !stable && !heights.needsFrame())

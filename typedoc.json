@@ -1,0 +1,26 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs",
+  "readme": "README.md",
+  "name": "tiled-globe",
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "skipErrorChecking": true,
+  "validation": {
+    "invalidLink": true,
+    "notExported": true,
+    "notDocumented": true
+  },
+  "requiredToBeDocumented": [
+    "Class",
+    "Function",
+    "Interface",
+    "Method",
+    "Property",
+    "TypeAlias",
+    "Variable"
+  ],
+  "treatValidationWarningsAsErrors": true,
+  "intentionallyNotExported": ["ImageryManifest", "PMTilesStorage", "GlobeBody", "TileBytesLoader"]
+}

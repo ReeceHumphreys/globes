@@ -1,24 +1,25 @@
 node_modules/
 dist/
+/docs/
 .DS_Store
 
 # Source rasters and generated pyramids live in ../tile-service.
 # These rules keep a copy placed back here from being committed.
 /data/
-/public/data/moon/wac/
-/public/data/moon/wac-preview/
+/examples/viewer/public/data/moon/wac/
+/examples/viewer/public/data/moon/wac-preview/
 
-/public/data/moon/elevation/
+/examples/viewer/public/data/moon/elevation/
 
 /.toolchains/
 
-/public/data/moon/apollo/
+/examples/viewer/public/data/moon/apollo/
 
-/public/data/moon/elevation-tiles/
-/public/data/earth/*
-!/public/data/earth/night-lights/
-!/public/data/earth/clouds/
-/public/data/mars/
+/examples/viewer/public/data/moon/elevation-tiles/
+/examples/viewer/public/data/earth/*
+!/examples/viewer/public/data/earth/night-lights/
+!/examples/viewer/public/data/earth/clouds/
+/examples/viewer/public/data/mars/
 
 # Local GPU benchmark fixture generated from downloaded elevation.
 /public/benchmarks/

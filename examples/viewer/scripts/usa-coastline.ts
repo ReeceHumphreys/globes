@@ -5,14 +5,12 @@ import { createHash } from "node:crypto";
 // country is a border, and every other edge is coast.
 const source =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_10m_admin_0_countries.geojson";
-const bytes = process.argv[2]
-  ? await readFile(process.argv[2])
-  : new Uint8Array(
-      await fetch(source).then((r) => {
-        if (!r.ok) throw new Error(`Countries: HTTP ${r.status}`);
-        return r.arrayBuffer();
-      }),
-    );
+async function download() {
+  const response = await fetch(source);
+  if (!response.ok) throw new Error(`Countries: HTTP ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+const bytes = process.argv[2] ? await readFile(process.argv[2]) : await download();
 if (
   createHash("sha256").update(bytes).digest("hex") !==
   "239eec57ac17f100a11e2536cffc56752c318b50ae765b0918ff7aab4ce8f255"
@@ -66,7 +64,7 @@ for (const country of countries.filter((c) => c.properties.ADM0_A3 === "USA"))
 const rounded = lines.map((line) =>
   line.map(([x, y]) => [Number(x.toFixed(4)), Number(y.toFixed(4))]),
 );
-const directory = new URL("../examples/viewer/assets/coastlines/", import.meta.url);
+const directory = new URL("../assets/coastlines/", import.meta.url);
 await mkdir(directory, { recursive: true });
 const output = JSON.stringify({
   type: "Feature",

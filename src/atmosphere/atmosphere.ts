@@ -93,8 +93,10 @@ const _bodyFromView = new THREE.Matrix4(),
  * table lookup for the pixels it covers.
  */
 export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicNodeMaterial> {
+  /** @internal */
   readonly isAtmosphere = true;
   override readonly type = "Atmosphere";
+  /** The air this was built from. */
   readonly preset: AtmospherePreset;
   #model?: AtmosphereModel;
   #light?: AtmosphereLight;

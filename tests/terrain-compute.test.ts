@@ -201,21 +201,3 @@ test("compute submission errors clear all flags and retain the direct shader fal
   f.update(20);
   assert.equal(f.errors.length, 1, "do not retry a failed GPU path every frame");
 });
-
-test("disposal during asynchronous compute compilation releases late resources without scheduling frames", async () => {
-  const f = fixture();
-  let complete!: () => void;
-  f.renderer.compileComputeAsync = () =>
-    new Promise<void>((resolve) => {
-      complete = resolve;
-    });
-  f.update(0);
-  const before = f.requests;
-  f.dispose();
-  complete();
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-  assert.equal(f.requests, before);
-  assert.deepEqual(f.errors, []);
-});

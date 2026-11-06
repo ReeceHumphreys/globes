@@ -17,6 +17,7 @@ import { GlobeLabel } from "./globe-label.ts";
 import { fillPaths, readGeoJson, surfaceSegments, type GeoShapes } from "./geojson.ts";
 import { ImageOverlay, SurfaceOverlay, type OverlayView } from "./overlay.ts";
 
+/** What a {@link GeoJsonOverlay} shows, and how. */
 export interface GeoJsonOverlayOptions {
   /** A GeoJSON object, or the URL of one. */
   data: string | object;
@@ -26,7 +27,9 @@ export interface GeoJsonOverlayOptions {
   lineWidth?: number;
   /** Polygon fill. Omit to draw outlines only. */
   fill?: THREE.ColorRepresentation;
+  /** 0 to 1. Defaults to 0.3. */
   fillOpacity?: number;
+  /** Of the whole overlay, 0 to 1. */
   opacity?: number;
   /** The marker for a Point. Defaults to a dot. */
   marker?: (properties: Record<string, unknown>) => HTMLElement;
@@ -37,9 +40,16 @@ const FILL_WIDTH = 4096;
 const OCCLUDER_SCALE = 0.999;
 
 /**
- * GeoJSON on a globe. Lines and outlines stay sharp and a constant width at any zoom.
- * Like other overlays they lie under clouds and haze: hide `Clouds` to see them all.
- * Points are GlobeLabels, so draw them with a CSS2DRenderer.
+ * GeoJSON on a globe, reading all of RFC 7946. Lines and outlines stay sharp and a
+ * constant width at any zoom. Like other overlays they lie under clouds and haze: hide
+ * `Clouds` to see them all.
+ *
+ * A position's third value is its height above the ellipsoid. Lines without one lie on
+ * the ellipsoid, so they drift from the ground in steep terrain seen up close. A step of
+ * more than 180° of longitude crosses the antimeridian, so data need not be cut there.
+ *
+ * Fills are painted at about 10 km per pixel on Earth, and ignore height. Points are
+ * GlobeLabels, so draw them with a CSS2DRenderer; without a height they sit on the terrain.
  *
  * One style per overlay: add one overlay for each style.
  */

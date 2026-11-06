@@ -5,8 +5,7 @@ import {
   type Texture,
 } from "three/webgpu";
 
-// NASA SVS Deep Star Maps (2012). Only a background: it does not illuminate
-// the terrain, and its orientation is not yet tied to a lunar inertial frame.
+// NASA SVS Deep Star Maps (2012). A background only: it lights nothing and aligns to no body.
 export async function loadStarBackground(): Promise<Texture> {
   const url = new URL(
     "data/sky/nasa-starmap-4k.jpg",

@@ -13,10 +13,6 @@
           14px/1.5 system-ui,
           sans-serif;
       }
-      .globe-container {
-        position: fixed;
-        inset: 0;
-      }
       canvas {
         display: block;
       }
@@ -53,15 +49,6 @@
           0 1px 2px #000,
           0 0 2px #000;
       }
-      .place[data-kind="landing"] {
-        color: #a4e8ff;
-      }
-      .place[data-kind="impact"] {
-        color: #ffb49d;
-      }
-      .place[data-kind="landmark"] {
-        color: #ffd586;
-      }
       .place::after {
         content: "";
         width: 6px;
@@ -71,13 +58,7 @@
         background: var(--dot, currentColor);
         box-shadow: 0 0 0 1px #101218;
       }
-      .panel a {
-        color: #a9caff;
-      }
-      .panel button.system-button[aria-pressed="true"] {
-        border-color: #9ccaff;
-      }
-      .panel button.system-button {
+      .panel button {
         border: 1px solid #61728d;
         border-radius: 6px;
         background: #293c54;
@@ -87,67 +68,10 @@
         font: inherit;
         margin: 0 6px 8px 0;
       }
-      .marker-countries {
-        border: 0;
-        padding: 0;
-        margin: 14px 0;
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-      }
-      .marker-countries legend {
-        padding: 0;
-        margin-bottom: 6px;
-      }
-      .marker-countries button {
-        border: 1px solid #61728d;
-        border-radius: 6px;
-        background: #293c54;
-        color: #eff7ff;
-        padding: 5px 8px;
-        cursor: pointer;
-        font: inherit;
-        font-size: 12px;
-      }
-      .marker-countries button[aria-pressed="false"] {
+      .panel button[aria-pressed="false"] {
         background: #141924;
         border-color: #3b4352;
         color: #a1aaba;
-      }
-      .marker-countries button[aria-pressed="false"] .country-flag {
-        opacity: 0.35;
-        filter: grayscale(1);
-      }
-      .marker-countries button:focus-visible {
-        outline: 2px solid #9ccaff;
-        outline-offset: 2px;
-      }
-      .country-flag {
-        font-size: 18px;
-        vertical-align: middle;
-      }
-      [data-marker-country="SU"] .country-flag {
-        display: inline-block;
-        background: #a91c24;
-        color: #ffdc5e;
-        width: 24px;
-        text-align: center;
-        font-size: 17px;
-        line-height: 17px;
-      }
-      .panel details {
-        font-size: 12px;
-      }
-      .panel label {
-        display: block;
-        margin: 10px 0;
-      }
-      .panel select,
-      .panel input[type="range"] {
-        display: block;
-        margin-top: 4px;
-        width: 100%;
-        padding: 5px;
       }
       .panel p {
         margin: 10px 0;
@@ -165,6 +89,6 @@
   </head>
   <body>
     <p id="startup-status" role="status">Loading globe code…</p>
-    <script type="module" src="/examples/viewer/main.ts"></script>
+    <script type="module" src="./main.ts"></script>
   </body>
 </html>

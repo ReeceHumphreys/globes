@@ -11,7 +11,6 @@ export const BODIES = {
     radiusMeters: 6378137,
     // WGS84. Imagery and heights are geodetic, so they sit on it unchanged.
     flattening: 1 / 298.257223563,
-    color: "#6fa8ff",
     exposureStops: 0.5,
     overview: earthOverviewURL,
     // Required by the image's CC BY-NC-SA license; the panel shows it. See assets/overviews.
@@ -30,7 +29,6 @@ export const BODIES = {
   moon: {
     name: "Moon",
     radiusMeters: 1737400,
-    color: "#d8d8d8",
     exposureStops: 2,
     overview: moonOverviewURL,
     imagery: "data/moon/wac/manifest.json",
@@ -40,7 +38,6 @@ export const BODIES = {
   mars: {
     name: "Mars",
     radiusMeters: 3396190,
-    color: "#ff8a5c",
     exposureStops: 2,
     overview: marsOverviewURL,
     imagery: "data/mars/viking/manifest.json",
@@ -52,7 +49,7 @@ export type BodyId = keyof typeof BODIES;
 export const BODY_IDS = Object.keys(BODIES) as BodyId[];
 
 export function bodyId(value: string | null): BodyId {
-  return value && Object.hasOwn(BODIES, value) ? (value as BodyId) : "moon";
+  return value && Object.hasOwn(BODIES, value) ? (value as BodyId) : "earth";
 }
 
 /** Same centers as tile-service datasets/earth-sites.json. The 2 km disks are the launch pads. */

@@ -9,6 +9,7 @@ import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
  * hide labels with a parent group instead.
  */
 export class GlobeLabel extends CSS2DObject {
+  /** @internal */
   readonly isGlobeLabel = true;
   /** Latitude in degrees, geodetic on a flattened globe. */
   latitude: number;

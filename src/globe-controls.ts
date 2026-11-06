@@ -18,10 +18,16 @@ const _direction = new THREE.Vector3(),
  * `change` to render on demand. The camera is attached to the globe (keeping its
  * world transform), so it rides along when the globe moves. Near and far planes
  * follow the altitude.
+ *
+ * Left drag orbits, right drag or Shift-drag looks around, and the wheel and pinch zoom
+ * toward the cursor.
  */
 export class GlobeControls extends THREE.EventDispatcher<GlobeControlsEventMap> {
+  /** The camera being moved. */
   readonly camera: THREE.PerspectiveCamera;
+  /** The element receiving input. */
   readonly domElement: HTMLElement;
+  /** The globe being orbited. */
   readonly globe: TiledGlobe;
   /** Closest approach to the terrain, in meters. */
   minAltitude: number;

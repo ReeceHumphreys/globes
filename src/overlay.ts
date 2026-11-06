@@ -10,6 +10,7 @@ export interface SurfacePoint {
   uv: THREE.Node<"vec2">;
   /** Screen derivatives of `uv`, safe across the antimeridian. Sample with `.grad(uvDx, uvDy)`. */
   uvDx: THREE.Node<"vec2">;
+  /** See `uvDx`. */
   uvDy: THREE.Node<"vec2">;
   /** Radians. Geodetic on a flattened globe. */
   latitude: THREE.Node<"float">;
@@ -33,13 +34,15 @@ export interface OverlayView {
 
 /**
  * Paints the surface of the TiledGlobe it is added to, following the terrain at every
- * zoom. `shader` returns a TSL vec4 of straight colour and alpha for each pixel.
+ * zoom. `shader` returns a TSL vec4 of straight colour and alpha for each pixel:
+ * `new SurfaceOverlay(({ uv, uvDx, uvDy }) => texture(map, uv).grad(uvDx, uvDy))`.
  *
  * Overlays are unlit, so a map stays readable at night, and they lie under clouds and
  * haze. They stack in child order. Adding or removing one recompiles the terrain, so
  * add them once and toggle `visible` or `opacity`, which are free.
  */
 export class SurfaceOverlay extends THREE.Object3D {
+  /** @internal */
   readonly isSurfaceOverlay = true;
   override readonly type: string = "SurfaceOverlay";
   /** 0 to 1. */
@@ -79,10 +82,13 @@ export class SurfaceOverlay extends THREE.Object3D {
   }
 }
 
+/** How a {@link Graticule} looks. */
 export interface GraticuleOptions {
   /** Degrees between lines, dividing 360 evenly. Omit to follow the camera's altitude. */
   spacing?: number;
+  /** Line colour. */
   color?: THREE.ColorRepresentation;
+  /** 0 to 1. */
   opacity?: number;
   /** Line width in CSS pixels. */
   lineWidth?: number;
@@ -165,6 +171,7 @@ export class Graticule extends SurfaceOverlay {
   }
 }
 
+/** What an {@link ImageOverlay} shows. */
 export interface ImageOverlayOptions {
   /**
    * North-up equirectangular image with alpha, covering the whole body: a URL, or a
@@ -172,6 +179,7 @@ export interface ImageOverlayOptions {
    * Texture to redraw it.
    */
   map: string | THREE.Texture;
+  /** 0 to 1. */
   opacity?: number;
 }
 

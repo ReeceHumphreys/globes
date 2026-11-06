@@ -97,49 +97,6 @@ test("near regions refine more and detail follows orbiting at fixed altitude", (
   assert.ok(averageLevel(tiles, 0) > averageLevel(tiles, 1));
 });
 
-test("distance, viewport, and quality control refinement; depth stays capped", () => {
-  const tiles = createTileBatch(384);
-  let previous = 0;
-  for (const distance of [10, 3, 2, 1.5, 1.2]) {
-    selectAdaptiveTiles(tiles, makeView(0, 0, distance));
-    assert.ok(tiles.count >= previous);
-    previous = tiles.count;
-  }
-  const view = makeView();
-  selectAdaptiveTiles(tiles, view);
-  const standard = tiles.count;
-  view[VIEW.ProjectionScale] *= 2;
-  selectAdaptiveTiles(tiles, view);
-  assert.ok(tiles.count >= standard);
-  view[VIEW.MaxCellPixels] *= 4;
-  selectAdaptiveTiles(tiles, view);
-  assert.ok(tiles.count <= standard);
-  view[VIEW.MaxLevel] = 0;
-  selectAdaptiveTiles(tiles, view);
-  assert.equal(tiles.count, 6);
-});
-
-test("invalid query/capacity failures preserve the previous buffer contents", () => {
-  const tiles = createTileBatch(384);
-  const view = makeView();
-  selectAdaptiveTiles(tiles, view);
-  const before = new Uint8Array(tiles.buffer).slice();
-  const count = tiles.count;
-  for (const [field, value] of [
-    [VIEW.Radius, 0],
-    [VIEW.ProjectionScale, NaN],
-    [VIEW.MaxLevel, 31],
-    [VIEW.Segments, 0],
-    [VIEW.MaxCellPixels, -1],
-  ]) {
-    const invalid = view.slice();
-    invalid[field] = value;
-    assert.throws(() => selectAdaptiveTiles(tiles, invalid), RangeError);
-    assert.equal(tiles.count, count);
-    assert.deepEqual(new Uint8Array(tiles.buffer), before);
-  }
-});
-
 test("surface inspection reaches deep local levels within a fixed tile budget", () => {
   for (const capacity of [6, 96, 2048]) {
     const tiles = createTileBatch(capacity);

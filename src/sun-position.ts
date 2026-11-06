@@ -44,14 +44,19 @@ function heliocentric([base, rate]: [Elements, Elements], centuries: number): Fl
 }
 
 /**
- * Planetocentric latitude and east longitude where the Sun is overhead, for the globe's
- * `setSun`. Accurate to about 0.01° for Earth and Mars; the Moon uses the Earth–Moon
+ * Planetocentric latitude and east longitude where the Sun is overhead, in degrees.
+ * Accurate to about 0.01° for Earth and Mars; the Moon uses the Earth–Moon
  * barycenter, which adds up to 0.15° of parallax.
  */
 export function subsolarPoint(
   center: string,
   timeMs: number,
-): { longitudeDeg: number; latitudeDeg: number } {
+): {
+  /** East positive. */
+  longitudeDeg: number;
+  /** North positive. */
+  latitudeDeg: number;
+} {
   const body = center.trim().toUpperCase();
   const orbit =
     body === "MARS"

@@ -14,23 +14,53 @@
  * Lengths are meters; coefficients are per meter.
  */
 
+/** One value per red, green and blue channel. */
 export type RGB = readonly [number, number, number];
 
+/** A planet's air. Lengths are meters; coefficients are per meter. */
 export interface AtmospherePreset {
   /** Thickness of the atmosphere above the surface. */
   height: number;
   /** Molecular scattering (no absorption) with an exponential density. */
-  rayleigh: { scattering: RGB; scaleHeight: number };
-  /** Aerosols: scattering, total extinction, exponential density and phase asymmetry g. */
-  mie: { scattering: RGB; extinction: RGB; scaleHeight: number; g: number };
-  /** An absorbing layer, such as ozone: tent-shaped density centered at `center`. */
-  absorption?: { extinction: RGB; center: number; width: number };
+  rayleigh: {
+    /** Scattering at the surface. */
+    scattering: RGB;
+    /** Height over which density falls by a factor of e. */
+    scaleHeight: number;
+  };
+  /** Aerosols with an exponential density. */
+  mie: {
+    /** Scattering at the surface. */
+    scattering: RGB;
+    /** Scattering plus absorption at the surface. */
+    extinction: RGB;
+    /** Height over which density falls by a factor of e. */
+    scaleHeight: number;
+    /** Phase asymmetry: 0 scatters evenly, toward 1 scatters forward. */
+    g: number;
+  };
+  /** An absorbing layer, such as ozone, with a tent-shaped density. */
+  absorption?: {
+    /** Extinction at the peak. */
+    extinction: RGB;
+    /** Height of the peak. */
+    center: number;
+    /** Full width of the tent. */
+    width: number;
+  };
   /** Sunlight relative to the terrain's own: 1 matches the globe's sun. */
   intensity: number;
   /** Faint light on the night side, such as moonlight, in the terrain's light units. */
   nightLight?: RGB;
-  /** A thin layer of air that glows by itself: radiance per meter of path. */
-  airglow?: { emission: RGB; altitude: number; width: number };
+  /** A thin layer of air that glows by itself. */
+  airglow?: {
+    /** Radiance per meter of path. */
+    emission: RGB;
+    /** Height of the layer. */
+    altitude: number;
+    /** Thickness of the layer. */
+    width: number;
+  };
 }
 
 /** Clear-sky Earth (Hillaire 2020 / Bruneton 2017 coefficients, 680/550/440 nm). */
@@ -79,6 +109,7 @@ export function marsAir(dustOpticalDepth = 0.2): AtmospherePreset {
     intensity: 586.2 / 1361,
   };
 }
+/** Mars on a clear day: {@link marsAir} at its default dust. */
 export const MARS_AIR = marsAir();
 
 export const TRANSMITTANCE_WIDTH = 256;

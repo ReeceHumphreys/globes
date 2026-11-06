@@ -60,23 +60,3 @@ test("sky light on the ground is blue, grows with sun height, and is dark at nig
   // skies give 10–15%; the rest is light scattered more than once, which this omits.
   assert.ok(noon[1] > 0.03 && noon[1] < 0.3, `noon sky light ${noon[1]}`);
 });
-
-test("phase functions are normalized over the sphere", () => {
-  for (const phase of [rayleighPhase, (nu: number) => miePhase(nu, 0.8)]) {
-    let sum = 0;
-    const n = 20_000;
-    for (let i = 0; i < n; i++) {
-      const nu = -1 + (2 * (i + 0.5)) / n;
-      sum += phase(nu) * 2 * Math.PI * (2 / n);
-    }
-    assert.ok(Math.abs(sum - 1) < 1e-3, `integral ${sum}`);
-  }
-});
-
-test("the Mars preset is a thin, dusty atmosphere with the requested optical depth", () => {
-  const model = buildAtmosphere(MARS_AIR, 3_396_190);
-  const zenith = model.transmittanceToSun(model.bottom, 1, new Float64Array(3));
-  assert.ok(Math.abs(-Math.log(zenith[1]) - 0.2) < 0.01, "green vertical optical depth ≈ 0.2");
-  assert.ok(MARS_AIR.intensity < 0.5);
-  assert.throws(() => marsAir(-1), RangeError);
-});

@@ -1,5 +1,6 @@
 import * as THREE from "three/webgpu";
 
+/** What to build {@link Clouds} from. */
 export interface CloudsOptions {
   /** Equirectangular image URL, north-up, brightness as cloud cover. */
   map: string;
@@ -18,9 +19,12 @@ export interface CloudsOptions {
  * would hide the ground. Set `visible = false` to turn it off.
  */
 export class Clouds extends THREE.Object3D {
+  /** @internal */
   readonly isClouds = true;
   override readonly type = "Clouds";
+  /** Height of the layer above the surface reference, in meters. */
   readonly altitude: number;
+  /** Camera altitudes in meters: no clouds at the first, full strength at the second. */
   readonly fadeAltitudes: readonly [number, number];
   /** The loaded image. @internal */
   map?: THREE.Texture;

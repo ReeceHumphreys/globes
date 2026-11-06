@@ -4,14 +4,12 @@ import { createHash } from "node:crypto";
 
 const source =
   "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/v5.1.2/geojson/ne_50m_ocean.geojson";
-const bytes = process.argv[2]
-  ? await readFile(process.argv[2])
-  : new Uint8Array(
-      await await fetch(source).then((r) => {
-        if (!r.ok) throw new Error(`Ocean polygons: HTTP ${r.status}`);
-        return r.arrayBuffer();
-      }),
-    );
+async function download() {
+  const response = await fetch(source);
+  if (!response.ok) throw new Error(`Ocean polygons: HTTP ${response.status}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+const bytes = process.argv[2] ? await readFile(process.argv[2]) : await download();
 const collection = JSON.parse(new TextDecoder().decode(bytes));
 const sourceSha256 = createHash("sha256").update(bytes).digest("hex");
 if (sourceSha256 !== "5b810162af4b20805838cfd766ef1a445c350cf6aafc8b589515daef30033adf")
@@ -44,7 +42,7 @@ for (const feature of collection.features) {
     }
   }
 }
-const directory = new URL("../examples/viewer/assets/ocean/", import.meta.url);
+const directory = new URL("../assets/ocean/", import.meta.url);
 await mkdir(directory, { recursive: true });
 const packed = gzipSync(pixels, { level: 9 });
 await writeFile(new URL("water-mask.bin.gz", directory), packed);

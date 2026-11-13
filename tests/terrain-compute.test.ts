@@ -6,7 +6,6 @@ import { build } from "vite";
 import * as THREE from "three/webgpu";
 import { createTileInstances, writeTileInstances } from "../src/rendering/tile-instances.ts";
 import { createTileBatch } from "../src/tiles/tile.ts";
-import { selectTiles } from "../src/tiles/quadtree.ts";
 const bundle = await build({
   configFile: false,
   logLevel: "silent",
@@ -31,7 +30,8 @@ function fixture(
 ) {
   const instances = createTileInstances(64),
     tiles = createTileBatch(64);
-  selectTiles(tiles, 0);
+  tiles.count = 4;
+  tiles.root.set([0, 1, 2, 3]);
   writeTileInstances(tiles, instances, 1737400);
   const width = 20,
     texture = new THREE.DataArrayTexture(new Uint8Array(width * width * 7 * 2), width, width, 7);
@@ -39,10 +39,7 @@ function fixture(
   texture.type = THREE.UnsignedByteType;
   const bindings = { data: new Float32Array(instances.capacity * HEIGHT_STRIDE) };
   for (let i = 0; i < instances.count; i++)
-    bindings.data.set(
-      [1, 0, 0.1, 0.9, 0.8, -0.8, 0, 0, 0, 0, 1, instances.faces[i], 0],
-      i * HEIGHT_STRIDE,
-    );
+    bindings.data.set([1, 0, 0.1, 0.9, 0.8, -0.8, 0, 0, 0, 0, 1, 0], i * HEIGHT_STRIDE);
   let fading = false,
     revision = 1;
   const heights = {
@@ -59,9 +56,10 @@ function fixture(
       THREE.RGBAFormat,
       THREE.FloatType,
     ),
-    manifest: { tileSize: 16, gutter: 2, maxLevel: 4, minMeters: -100, maxMeters: 100 },
+    source: { tileSize: 16, gutter: 2, maxLevel: 4, minMeters: -100, maxMeters: 100 },
     needsFrame: () => fading,
     update() {},
+    dispose() {},
   };
   const jobs: string[] = [],
     errors: unknown[] = [],
@@ -95,11 +93,13 @@ function fixture(
       sun,
       altitude: 1000,
       overlays: [],
+      masks: [],
+      camera: new THREE.Vector3(),
       light: null,
     });
   };
   const flags = () => {
-    const buffer = layer.group.children[0].geometry.getAttribute("heightBlendFace").data;
+    const buffer = layer.group.children[0].geometry.getAttribute("heightBlend").data;
     return Array.from(
       { length: instances.count },
       (_, i) => buffer.array[i * ROW_STRIDE + ROW_FLAGS],
@@ -181,7 +181,7 @@ test("GPU caches compile lazily, bake within budgets, reuse camera-only frames, 
   );
   assert.deepEqual(f.errors, []);
   assert.ok(f.requests > 0);
-  assert.equal(f.layer.group.children[0].geometry.getAttribute("heightBlendFace").itemSize, 4);
+  assert.equal(f.layer.group.children[0].geometry.getAttribute("heightBlend").itemSize, 3);
 });
 
 test("compute submission errors clear all flags and retain the direct shader fallback", async (t) => {

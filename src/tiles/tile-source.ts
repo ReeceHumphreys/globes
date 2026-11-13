@@ -1,12 +1,22 @@
 import { PMTiles, SharedPromiseCache } from "pmtiles";
+import { MAX_LEVEL } from "./roots.ts";
 
-/** PMTiles indexes face-local coordinates; this profile is not a Mercator map. */
+/** PMTiles indexes root-local coordinates, one archive per root, y up: this is not Mercator. */
 export interface PMTilesStorage {
   type: "pmtiles";
-  profile: "normalized-cube-v1";
-  /** Keys are source-prefix/face, or simply face for imagery. */
+  profile: "geographic-polar-v1";
+  /** Keys are source-prefix/root, or simply root for imagery. */
   archives: Record<string, string>;
 }
+
+const PATH_PART = "[a-zA-Z0-9_-][a-zA-Z0-9._-]*";
+const ARCHIVE_KEY = new RegExp(`^(?:${PATH_PART}/)*[0-3]$`);
+const TILE_PATH = new RegExp(`^((?:${PATH_PART}/)*[0-3])/(\\d+)/(\\d+)/(\\d+)\\.(?:png|u16)$`);
+
+/** Matches a relative path the contract allows, ending in `.extension`. */
+export const relativePath = (extension: string) =>
+  new RegExp(`^(?:${PATH_PART}/)*${PATH_PART}\\.${extension}$`);
+const ARCHIVE_PATH = relativePath("pmtiles");
 
 export function validateTileStorage(value: unknown): asserts value is PMTilesStorage | undefined {
   if (value === undefined) return;
@@ -14,7 +24,7 @@ export function validateTileStorage(value: unknown): asserts value is PMTilesSto
   if (
     !s ||
     s.type !== "pmtiles" ||
-    s.profile !== "normalized-cube-v1" ||
+    s.profile !== "geographic-polar-v1" ||
     !s.archives ||
     typeof s.archives !== "object" ||
     Array.isArray(s.archives) ||
@@ -23,11 +33,7 @@ export function validateTileStorage(value: unknown): asserts value is PMTilesSto
   )
     throw new Error("Invalid PMTiles storage descriptor.");
   for (const [key, path] of Object.entries(s.archives)) {
-    if (
-      !/^(?:[a-zA-Z0-9_-]+\/)*[0-5]$/.test(key) ||
-      typeof path !== "string" ||
-      !/^(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.pmtiles$/.test(path)
-    )
+    if (!ARCHIVE_KEY.test(key) || typeof path !== "string" || !ARCHIVE_PATH.test(path))
       throw new Error("Invalid PMTiles archive reference.");
   }
 }
@@ -46,11 +52,11 @@ export async function fetchTileBytes(url: string, signal: AbortSignal): Promise<
  */
 export function createTileBytesLoader(
   storage: PMTilesStorage | undefined,
-  manifestURL: string,
+  documentURL: string,
 ): TileBytesLoader {
   validateTileStorage(storage);
   if (!storage) return fetchTileBytes;
-  const base = new URL(".", manifestURL);
+  const base = new URL(".", documentURL);
   // SharedPromiseCache tracks each directory consumer's AbortSignal. One tile
   // being cancelled must not cancel a directory needed by another tile.
   const directories = new SharedPromiseCache(128);
@@ -61,13 +67,14 @@ export function createTileBytesLoader(
     if (tileURL.origin !== base.origin || !tileURL.pathname.startsWith(base.pathname))
       throw new Error("Tile URL escapes its PMTiles dataset.");
     const path = decodeURIComponent(tileURL.pathname.slice(base.pathname.length));
-    const match = /^((?:[a-zA-Z0-9_-]+\/)*[0-5])\/(\d+)\/(\d+)\/(\d+)\.(png|u16)$/.exec(path);
-    if (!match) throw new Error("Invalid PMTiles cube address.");
+    const match = TILE_PATH.exec(path);
+    if (!match) throw new Error("Invalid PMTiles tile address.");
     const [, key, level, xx, yy] = match;
     const z = Number(level),
       x = Number(xx),
       y = Number(yy);
-    if (z > 20 || x >= 2 ** z || y >= 2 ** z) throw new Error("PMTiles cube address out of range.");
+    if (z > MAX_LEVEL || x >= 2 ** z || y >= 2 ** z)
+      throw new Error("PMTiles tile address out of range.");
     const relative = storage.archives[key];
     if (!relative) throw new Error(`No PMTiles archive for ${key}`);
     let archive = archives.get(key);

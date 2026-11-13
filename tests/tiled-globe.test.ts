@@ -5,6 +5,7 @@ import { build } from "vite";
 import {
   DataTexture,
   DirectionalLight,
+  Object3D,
   PerspectiveCamera,
   Raycaster,
   Scene,
@@ -30,8 +31,16 @@ const code = entry.code.replace(
   /from (["'])(three(?:\/[^"']*)?)\1/g,
   (_, quote, specifier) => `from ${JSON.stringify(import.meta.resolve(specifier))}`,
 );
-const { TiledGlobe, Atmosphere, Clouds, EARTH_AIR, Graticule, ImageOverlay, GeoJsonOverlay } =
-  await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
+const {
+  TiledGlobe,
+  GlobeAnchor,
+  Atmosphere,
+  Clouds,
+  EARTH_AIR,
+  Graticule,
+  ImageOverlay,
+  GeoJsonOverlay,
+} = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
 
 const radius = 1737400;
 const renderer = {
@@ -162,8 +171,114 @@ test("labels sit on the surface and hide behind the horizon or behind the camera
   away.updateMatrixWorld(true);
   globe.update(away, renderer);
   assert.equal(near.visible, false, "behind the camera");
+  let groupRemoved = 0;
+  const grouped = {
+    style: {},
+    setAttribute() {},
+    remove: () => groupRemoved++,
+  } as unknown as HTMLElement;
+  const group = new Object3D();
+  group.add(new GlobeLabel(grouped, 10, 10));
+  globe.add(group);
+  globe.remove(group);
+  assert.equal(groupRemoved, 1, "removing a parent takes its label off the page");
   globe.dispose();
   assert.equal(removed, 2, "disposing the globe takes its labels off the page");
+});
+
+test("an anchor holds its children in east-up-south meters at its point", async () => {
+  const globe = new TiledGlobe({ radius, overview: overview() });
+  await globe.ready;
+  const pad = new GlobeAnchor(0, 0, 500, "ellipsoid"),
+    rocket = new Object3D(),
+    tilted = new GlobeAnchor(45, 90);
+  rocket.position.set(10, 20, 30);
+  pad.add(rocket);
+  globe.add(pad, tilted);
+  globe.update(camera(radius * 3), renderer);
+  globe.updateMatrixWorld(true);
+  const at = rocket.getWorldPosition(new Vector3());
+  // At latitude 0, longitude 0: east is -z, up is +x, south is -y.
+  assert.ok(at.distanceTo(new Vector3(radius + 520, -30, -10)) < 1e-6);
+  const up = new Vector3(0, 1, 0).applyQuaternion(tilted.quaternion);
+  assert.ok(up.distanceTo(globe.normalAt(tilted.position)) < 1e-9);
+  assert.throws(() => new GlobeAnchor(91, 0), RangeError);
+  globe.dispose();
+});
+
+test("the globe says once when the view has fully loaded", async () => {
+  const globe = new TiledGlobe({ radius, overview: overview() });
+  let loads = 0;
+  globe.addEventListener("loaded", () => loads++);
+  globe.update(camera(radius * 3), renderer);
+  assert.equal(globe.stats.loaded, false, "before its data has loaded");
+  await globe.ready;
+  globe.update(camera(radius * 3), renderer);
+  globe.update(camera(radius * 3), renderer);
+  assert.equal(globe.stats.loaded, true);
+  assert.equal(loads, 1);
+  const sample = globe.sampleHeight(new Vector3(1, 0, 0));
+  assert.deepEqual(sample, {
+    height: 0,
+    verticalDatum: "ellipsoid",
+    level: undefined,
+    spacing: undefined,
+  });
+  globe.dispose();
+});
+
+test("any HeightSource and ImagerySource plug in, with no dataset behind them", async () => {
+  const width = 20;
+  const heights = {
+    tileSize: 16,
+    gutter: 2,
+    maxLevel: 0,
+    scaleMeters: 1,
+    offsetMeters: 0,
+    minMeters: 500,
+    maxMeters: 500,
+    verticalDatum: "sphere",
+    bounds: ({ level }: { level: number }) =>
+      level === 0 ? { min: 500, max: 500, lower: 500, upper: 500 } : undefined,
+    load: async () => new Uint16Array(width * width).fill(500),
+  };
+  let imageLoads = 0;
+  const imagery = {
+    tileSize: 16,
+    gutter: 2,
+    maxLevel: () => 0,
+    has: ({ level }: { level: number }) => level === 0,
+    load: async () => (imageLoads++, new Uint8Array(width * width * 4).fill(255)),
+    describe: () => "Test imagery",
+  };
+  const globe = new TiledGlobe({ radius, overview: overview(), imagery, elevation: heights });
+  await globe.ready;
+  // Elevation adds GPU caches, so this renderer compiles compute jobs too.
+  const computing = { ...renderer, compileComputeAsync: async () => {} };
+  const started = Date.now();
+  while (!globe.stats.loaded && Date.now() - started < 3000) {
+    globe.update(camera(radius * 3), computing);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(globe.stats.loaded, true);
+  assert.ok(imageLoads >= 4, "every root's imagery");
+  assert.deepEqual(globe.sampleHeight(new Vector3(1, 0, 0)), {
+    height: 500,
+    verticalDatum: "sphere",
+    level: 0,
+    spacing: (Math.PI * radius) / 16,
+  });
+  globe.dispose();
+});
+
+test("disposing before the surface loads releases its textures", async () => {
+  const texture = overview();
+  let disposed = 0;
+  texture.addEventListener("dispose", () => disposed++);
+  const globe = new TiledGlobe({ radius, overview: texture });
+  globe.dispose();
+  await globe.ready;
+  assert.equal(disposed, 1);
 });
 
 test("an Atmosphere child is found by the globe and sized from its radius", async () => {
@@ -181,6 +296,17 @@ test("an Atmosphere child is found by the globe and sized from its radius", asyn
   air.dispose();
   assert.equal(air.parent, null);
   globe.update(camera(6_378_137 * 3), renderer); // and the globe copes with its removal
+  const earth = new TiledGlobe({ radius: 6_378_137, overview: overview() });
+  const sky = new Atmosphere(EARTH_AIR);
+  earth.add(sky);
+  // With no sun light the sun is over longitude 90° east, -z.
+  const noon = sky.sunlightAt(new Vector3(0, 0, -6_378_237)),
+    dusk = sky.sunlightAt(new Vector3(6_379_137, 0, 0)),
+    night = sky.sunlightAt(new Vector3(0, 0, 6_378_237));
+  assert.ok(noon.r > 0.8 && noon.b > 0.6, "little loss straight down");
+  assert.ok(dusk.r > dusk.b && dusk.r < noon.r, "red and dim at the terminator");
+  assert.equal(night.r + night.g + night.b, 0, "the planet's shadow");
+  earth.dispose();
   globe.dispose();
 });
 
@@ -233,6 +359,23 @@ test("GeoJSON lines are built on the globe's surface and cleaned up with the ove
   assert.equal(overlay.parent, null);
   globe.update(camera(radius * 3), renderer);
   globe.dispose();
+});
+
+test("disposing a GeoJSON overlay removes its point markers", async () => {
+  let removed = 0;
+  const element = {
+    style: {},
+    setAttribute() {},
+    remove: () => removed++,
+  } as unknown as HTMLElement;
+  const overlay = new GeoJsonOverlay({
+    data: { type: "Point", coordinates: [10, 20] },
+    marker: () => element,
+  });
+  await Promise.resolve();
+  assert.ok(overlay.children.length > 0);
+  overlay.dispose();
+  assert.equal(removed, 1);
 });
 
 test("clouds reach sky and terrain through one light, which the terrain does not own", async () => {

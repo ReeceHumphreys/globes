@@ -7,7 +7,7 @@ import {
   LinearFilter,
 } from "three/webgpu";
 
-// One reusable UV test image. Numbers are (column,row) within each CUBE FACE,
+// One reusable UV test image. Numbers are (column,row) within each root,
 // not geographic addresses. Pixels are stored bottom-up so row 0 is v=0.
 const glyphs: Record<string, string[]> = {
   "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
@@ -76,7 +76,7 @@ export function createCheckerboardTexture(): DataTexture {
   text("U+", 230, 22, 3, [245, 90, 80]);
   text("V+", 22, 230, 3, [80, 220, 140]);
   const texture = new DataTexture(pixels, size, size, RGBAFormat, UnsignedByteType);
-  texture.name = "Face-wide numbered UV checkerboard";
+  texture.name = "Root-wide numbered UV checkerboard";
   texture.colorSpace = SRGBColorSpace;
   texture.generateMipmaps = true;
   texture.minFilter = LinearMipmapLinearFilter;

@@ -2,16 +2,16 @@ fn surfaceNormal(
   heightTiles: texture_2d_array<f32>,
   direction: vec3<f32>, localUV: vec2<f32>, layers: vec2<f32>,
   bestUV: vec4<f32>, parentUV: vec4<f32>, transition: f32,
-  face: f32, faceScale: vec2<f32>, radius: f32, enabled: f32
+  root: f32, rootScale: f32, radius: f32, enabled: f32, encoding: vec2<f32>
 ) -> vec3<f32> {
   let d = normalize(direction);
   if (enabled < 0.5) { return d; }
   if (layers.x < 0.5) { return d; }
   let size = f32(textureDimensions(heightTiles).x);
   let step = vec2<f32>(1.0) / max(abs(bestUV.zw)*size, vec2<f32>(0.000001));
-  let hp = sampleSurfaceHeight(heightTiles,direction,localUV+vec2<f32>(step.x,0.0),layers,bestUV,parentUV,transition,1.0);
-  let hm = sampleSurfaceHeight(heightTiles,direction,localUV-vec2<f32>(step.x,0.0),layers,bestUV,parentUV,transition,1.0);
-  let vp = sampleSurfaceHeight(heightTiles,direction,localUV+vec2<f32>(0.0,step.y),layers,bestUV,parentUV,transition,1.0);
-  let vm = sampleSurfaceHeight(heightTiles,direction,localUV-vec2<f32>(0.0,step.y),layers,bestUV,parentUV,transition,1.0);
-  return normalFromGradient(direction,vec2<f32>(hp-hm,vp-vm),step,face,faceScale,radius);
+  let hp = sampleSurfaceHeight(heightTiles,direction,localUV+vec2<f32>(step.x,0.0),layers,bestUV,parentUV,transition,1.0,encoding);
+  let hm = sampleSurfaceHeight(heightTiles,direction,localUV-vec2<f32>(step.x,0.0),layers,bestUV,parentUV,transition,1.0,encoding);
+  let vp = sampleSurfaceHeight(heightTiles,direction,localUV+vec2<f32>(0.0,step.y),layers,bestUV,parentUV,transition,1.0,encoding);
+  let vm = sampleSurfaceHeight(heightTiles,direction,localUV-vec2<f32>(0.0,step.y),layers,bestUV,parentUV,transition,1.0,encoding);
+  return normalFromGradient(direction,vec2<f32>(hp-hm,vp-vm),step,root,rootScale,radius);
 }

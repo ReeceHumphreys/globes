@@ -11,6 +11,5 @@ fn positionToLatLon(position: vec3<f32>) -> vec2<f32> {
     longitude = atan2(-position.z, position.x);
   }
 
-  // Components are (latitude, longitude), both in radians.
   return vec2<f32>(latitude, longitude);
 }

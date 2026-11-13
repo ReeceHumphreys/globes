@@ -13,3 +13,6 @@ proxy `/data/moon`, `/data/earth` and `/data/mars` to `http://127.0.0.1:8787`.
 selects dataset URLs in production builds.
 
 `npm run data:ocean-mask` and `npm run data:usa-coastline` rebuild the data in `assets`.
+
+Add `?style=minimal`, or press Minimal in the panel, for Earth as a drawn map, from
+tile-service's `earth/land` tileset.

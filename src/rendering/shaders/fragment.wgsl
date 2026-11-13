@@ -1,5 +1,5 @@
 fn fragmentColor(
-  faceColor: vec3<f32>, checkerColor: vec3<f32>,
+  rootColor: vec3<f32>, checkerColor: vec3<f32>,
   overviewColor: vec3<f32>, imageryEnabled: f32, tiledImageryEnabled: f32,
   tileColor: vec4<f32>, parentColor: vec4<f32>, transition: f32,
   normal: vec3<f32>, sun: vec3<f32>, view: vec3<f32>, shadingEnabled: f32,
@@ -8,7 +8,7 @@ fn fragmentColor(
   tileTexels: f32, parentTexels: f32, overviewTexels: f32,
   sunColor: vec3<f32>, skyLight: vec3<f32>, water: f32, waterRoughness: f32
 ) -> vec3<f32> {
-  let checkerResult = checkerColor * mix(vec3<f32>(1.0), faceColor, 0.3);
+  let checkerResult = checkerColor * mix(vec3<f32>(1.0), rootColor, 0.3);
   // The normal is radial on the global grid and follows the height tile when one
   // is loaded, so a landing-site DTM can put crater walls into night. Multiply
   // only: photographed shadows stay in the picture.

@@ -55,10 +55,6 @@ export function ellipsoidDistance(
   ray: { origin: Vector3; direction: Vector3 },
   radius: number,
   flattening: number,
-  sphereDistance: (
-    ray: { origin: Vector3; direction: Vector3 },
-    radius: number,
-  ) => number | undefined,
 ): number | undefined {
   // Stretching the poles out turns the ellipsoid into a sphere.
   const stretch = 1 / (1 - flattening);
@@ -68,4 +64,19 @@ export function ellipsoidDistance(
   _direction.divideScalar(length);
   const distance = sphereDistance({ origin: _origin, direction: _direction }, radius);
   return distance === undefined ? undefined : distance / length;
+}
+
+/** Distance along a unit-direction ray to a sphere at the origin, if it hits. */
+export function sphereDistance(
+  { origin, direction }: { origin: Vector3; direction: Vector3 },
+  radius: number,
+): number | undefined {
+  const b = origin.dot(direction);
+  // This form avoids subtracting two planet-sized squared lengths near the surface.
+  const c = (origin.length() - radius) * (origin.length() + radius);
+  const discriminant = b * b - c;
+  if (discriminant < 0) return undefined;
+  const root = Math.sqrt(discriminant);
+  const distance = b < 0 ? c / (-b + root) : -b - root;
+  return distance < 0 ? undefined : distance;
 }

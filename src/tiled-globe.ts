@@ -1,9 +1,13 @@
 import * as THREE from "three/webgpu";
 import type { TerrainCacheOptions } from "./rendering/terrain-cache-state.ts";
 import type { TerrainCacheStats } from "./rendering/terrain-compute.ts";
-import { createSelectionView, VIEW } from "./tiles/lod.ts";
+import { VIEW } from "./tiles/lod.ts";
+import { createCameraView } from "./camera-view.ts";
+import { placeChildren } from "./placement.ts";
+import { resolveHeights, resolveImagery, type SourceContext } from "./sources.ts";
 import { selectAdaptiveTiles } from "./tiles/quadtree.ts";
 import { createTileProducer } from "./tile-producer.ts";
+import { MAX_LEVEL, ROOT_COUNT } from "./tiles/roots.ts";
 import { createTileInstances, type TileInstances } from "./rendering/tile-instances.ts";
 import {
   createTileLayer,
@@ -13,16 +17,15 @@ import {
 
 export type { SurfaceLayer };
 import { geographicToDirection } from "./geographic.ts";
-import { sphereDistance } from "./orbit.ts";
 import { altitudeOf, ellipsoidDistance, ellipsoidOffset, toSphere } from "./ellipsoid.ts";
-import { loadImageryManifest } from "./imagery/manifest.ts";
-import { createImageryCache } from "./imagery/tile-cache.ts";
+import type { WmtsImagery } from "./imagery/wmts.ts";
+import type { ImagerySource } from "./imagery/source.ts";
 import { loadRegionalCatalog } from "./imagery/regions.ts";
-import { loadHeightTiles } from "./elevation/tiles.ts";
-import { createHeightTileCache, type HeightTileCache } from "./elevation/tile-cache.ts";
-import type { GlobeLabel } from "./globe-label.ts";
+import type { HeightSource } from "./elevation/source.ts";
+import { removeLabelElements, type GlobeLabel } from "./globe-label.ts";
 import type { Atmosphere } from "./atmosphere/atmosphere.ts";
 import type { SurfaceOverlay } from "./overlay.ts";
+import type { TerrainMask } from "./terrain-mask.ts";
 
 /** What to build a {@link TiledGlobe} from. Every dataset is optional. */
 export interface TiledGlobeOptions {
@@ -47,12 +50,15 @@ export interface TiledGlobeOptions {
    * row first. Water gets sun glint and reflected sky. A texture transfers ownership.
    */
   waterMask?: string | THREE.Texture;
-  /** Imagery tile manifest URL. Like all URLs here, it resolves against `document.baseURI`. */
-  imagery?: string;
+  /**
+   * Imagery tile manifest URL, a WMTS service, or any {@link ImagerySource}. Like all URLs
+   * here, a manifest resolves against `document.baseURI`. A source transfers ownership.
+   */
+  imagery?: string | WmtsImagery | ImagerySource;
   /** Sparse regional imagery catalog URL. */
   regions?: string;
-  /** Height-tile manifest URL. */
-  elevation?: string;
+  /** Height-tile manifest URL, or any {@link HeightSource}. A source transfers ownership. */
+  elevation?: string | HeightSource;
   /**
    * Light the terrain from this light: a DirectionalLight's direction, or the
    * direction toward a PointLight (a Sun at the center of a solar-system scene).
@@ -61,6 +67,11 @@ export interface TiledGlobeOptions {
   sun?: THREE.DirectionalLight | THREE.PointLight | null;
   /** Lunar-style Hapke reflectance instead of Lambert. An illustrative preset, not a fitted one. */
   hapke?: boolean;
+  /**
+   * Light everywhere, on top of the sun, so a drawn map stays readable at night. 1 is as
+   * bright as the noon sun. Defaults to 0.
+   */
+  ambient?: number;
   /** Ground-locked grain where resident imagery is magnified past its texels. */
   surfaceDetail?: boolean;
   /** Grid cells along a tile's edge, 2 to 128. Defaults to 32. */
@@ -71,9 +82,9 @@ export interface TiledGlobeOptions {
   maxLevel?: number;
   /** Refine a tile until its grid cells are this many pixels across. Defaults to 12. */
   maxCellPixels?: number;
-  /** Resident imagery tiles, 6 to 255. This bounds GPU memory at any depth. Defaults to 128. */
+  /** Resident imagery tiles, 6 to 255. This bounds GPU memory at any depth. Defaults to 255. */
   imagerySlots?: number;
-  /** Resident height tiles, 6 to 255. Defaults to 64. */
+  /** Resident height tiles, 6 to 255. Defaults to 128. */
   heightSlots?: number;
   /** Budgets for the terrain's derived GPU caches. */
   caches?: TerrainCacheOptions;
@@ -99,12 +110,31 @@ export interface TiledGlobeStats {
   elevationStatus: string;
   /** Derived GPU caches, once elevation has loaded. */
   terrainCaches?: Readonly<TerrainCacheStats>;
+  /** Every tile the last update wanted has arrived or failed, and no fade is running. */
+  loaded: boolean;
+}
+
+/** A displayed height and where it came from. */
+export interface HeightSample {
+  /** Meters above `verticalDatum`, as drawn. */
+  height: number;
+  /** What height 0 is: the dataset's `verticalDatum`, or `ellipsoid` without elevation. */
+  verticalDatum: string;
+  /** Dataset level of the finest height tile in the sample. Undefined where none is drawn. */
+  level: number | undefined;
+  /** North-south meters between that tile's samples. Undefined where none is drawn. */
+  spacing: number | undefined;
 }
 
 /** Events a {@link TiledGlobe} dispatches. */
 export interface TiledGlobeEventMap extends THREE.Object3DEventMap {
   /** Streaming, a fade or a setting needs another frame; render again. */
   change: object;
+  /**
+   * The view has fully loaded: every wanted tile arrived or failed and fades finished. The
+   * frame rendered after this update is complete. Fires again after the next change of view.
+   */
+  loaded: object;
   /** A failed download or GPU job. Never fatal. Without a listener it is logged. */
   error: {
     /** What went wrong. */
@@ -112,15 +142,12 @@ export interface TiledGlobeEventMap extends THREE.Object3DEventMap {
   };
 }
 
-const _sphereCamera = new THREE.Vector3(),
-  _normal = new THREE.Vector3(),
-  _cameraQuaternion = new THREE.Quaternion(),
+const _normal = new THREE.Vector3(),
   _globeQuaternion = new THREE.Quaternion(),
   _bufferSize = new THREE.Vector2(),
   _inverse = new THREE.Matrix4(),
   _ray = new THREE.Ray(),
   _point = new THREE.Vector3(),
-  _toward = new THREE.Vector3(),
   _target = new THREE.Vector3();
 
 /**
@@ -132,6 +159,10 @@ const _sphereCamera = new THREE.Vector3(),
  *
  * Its local frame is body-fixed: +Y north, +X longitude zero, −Z longitude 90° east, in
  * meters. Children ride the surface. Move or rotate it freely, but keep it unscaled.
+ *
+ * Tiles follow latitude and longitude, with polar stereographic caps above 80° so the
+ * poles stay square. Data comes from prepared manifests or, with {@link WmtsImagery},
+ * straight from a tile service.
  *
  * Add an {@link Atmosphere}, {@link Clouds}, overlays and {@link GlobeLabel}s as children.
  * The globe drives them, but each that has `dispose()` is yours to dispose.
@@ -219,6 +250,13 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
   set hapke(value: boolean) {
     this.#terrain.set({ hapke: value });
   }
+  /** Light everywhere, on top of the sun. See {@link TiledGlobeOptions.ambient}. */
+  get ambient() {
+    return this.#terrain.settings.ambient;
+  }
+  set ambient(value: number) {
+    this.#terrain.set({ ambient: value });
+  }
   /** Draw the tile grid. */
   get wireframe() {
     return this.#terrain.settings.wireframe;
@@ -243,6 +281,11 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
   /** Displayed terrain height, in meters above the ellipsoid, at a surface normal. Not a position: see {@link normalAt}. */
   heightAt(direction: THREE.Vector3): number {
     return this.#terrain.heightAt(direction.x, direction.y, direction.z);
+  }
+
+  /** {@link heightAt}, with its vertical datum and the resolution of the tile it came from. */
+  sampleHeight(direction: THREE.Vector3): HeightSample {
+    return this.#terrain.sampleHeight(direction.x, direction.y, direction.z);
   }
 
   /** Point on the displayed terrain, plus `altitude`, in the globe's local frame. */
@@ -278,7 +321,7 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
     let distance: number | undefined,
       height = 0;
     for (let i = 0; i < 4; i++) {
-      distance = ellipsoidDistance(_ray, this.radius + height, this.flattening, sphereDistance);
+      distance = ellipsoidDistance(_ray, this.radius + height, this.flattening);
       if (distance === undefined) return;
       height = this.heightAt(this.normalAt(_ray.at(distance, _point), _normal));
     }
@@ -291,12 +334,17 @@ export class TiledGlobe extends THREE.Object3D<TiledGlobeEventMap> {
   /** Cancel downloads, release GPU resources and remove its labels from the page. Idempotent. */
   dispose(): void {
     this.#terrain.dispose();
-    // CSS2DObjects remove their element only when they themselves are removed,
-    // not when an ancestor is; take this globe's labels off the page too.
-    this.traverse((object) => {
-      if ("isCSS2DObject" in object) (object as unknown as { element: Element }).element.remove();
-    });
+    removeLabelElements(this);
     this.removeFromParent();
+  }
+
+  /** Removing a parent does not remove a CSS2D element's node. Take those off the page too. */
+  override remove(...objects: THREE.Object3D[]): this {
+    for (const object of objects) {
+      removeLabelElements(object);
+      super.remove(object);
+    }
+    return this;
   }
 
   /** Direction toward the sun in the local frame. @internal */
@@ -324,18 +372,18 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     signal = controller.signal;
   const segments = options.gridSegments ?? 32,
     capacity = options.tileCapacity ?? 2048;
-  const maxLevel = options.maxLevel ?? 20,
+  const maxLevel = options.maxLevel ?? MAX_LEVEL,
     cellPixels = options.maxCellPixels ?? 12;
   if (
     !Number.isInteger(segments) ||
     segments < 2 ||
     segments > 128 ||
     !Number.isInteger(capacity) ||
-    capacity < 6 ||
+    capacity < ROOT_COUNT ||
     capacity > 65536 ||
     !Number.isInteger(maxLevel) ||
     maxLevel < 0 ||
-    maxLevel > 20 ||
+    maxLevel > MAX_LEVEL ||
     !Number.isFinite(cellPixels) ||
     cellPixels <= 0
   )
@@ -350,67 +398,21 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     else console.warn("[TiledGlobe]", error);
   };
 
-  const view = createSelectionView();
-  view[VIEW.Radius] = radius;
-  view[VIEW.Segments] = segments;
-  view[VIEW.MaxLevel] = maxLevel;
-  view[VIEW.MaxCellPixels] = cellPixels;
-  view[VIEW.Cull] = 1;
-  const relativeCamera = new THREE.PerspectiveCamera(),
-    frustum = new THREE.Frustum(),
-    projectionView = new THREE.Matrix4(),
-    sun = new THREE.Vector3(),
-    cameraForward = new THREE.Vector3(),
-    cameraPosition = new THREE.Vector3();
-  function updateView(camera: THREE.PerspectiveCamera, reversedDepth: boolean, height: number) {
-    camera.updateMatrixWorld(true);
-    globe.updateMatrixWorld(true);
-    // Selection runs in the globe's frame: camera position and rotation relative to it.
-    globe.worldToLocal(camera.getWorldPosition(cameraPosition));
-    globe.getWorldQuaternion(_globeQuaternion).invert();
-    relativeCamera.quaternion.multiplyQuaternions(
-      _globeQuaternion,
-      camera.getWorldQuaternion(_cameraQuaternion),
-    );
-    relativeCamera.projectionMatrix.copy(camera.projectionMatrix);
-    relativeCamera.updateMatrixWorld(true);
-    relativeCamera.getWorldDirection(cameraForward);
-    projectionView.multiplyMatrices(
-      relativeCamera.projectionMatrix,
-      relativeCamera.matrixWorldInverse,
-    );
-    frustum.setFromProjectionMatrix(projectionView, THREE.WebGPUCoordinateSystem, reversedDepth);
-    // Selection sees the sphere, with the camera at its height over the matching point.
-    // That is exact beneath the camera and drifts with distance, by less than this.
-    toSphere(cameraPosition, radius, flattening, _sphereCamera);
-    const planeSlack = Math.min(
-      radius * flattening,
-      Math.max(0, _sphereCamera.length() - radius) * 0.02,
-    );
-    for (let i = 0; i < 6; i++) {
-      const plane = frustum.planes[i];
-      view.set(
-        [plane.normal.x, plane.normal.y, plane.normal.z, plane.constant + planeSlack],
-        VIEW.Planes + i * 4,
-      );
-    }
-    view[VIEW.CameraX] = _sphereCamera.x;
-    view[VIEW.CameraY] = _sphereCamera.y;
-    view[VIEW.CameraZ] = _sphereCamera.z;
-    view[VIEW.ProjectionScale] = height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-  }
+  const cameraView = createCameraView({ radius, flattening, segments, maxLevel, cellPixels }),
+    view = cameraView.view,
+    sun = new THREE.Vector3();
 
-  let heightTiles: HeightTileCache | undefined;
   const settings: Settings = {
     shading: true,
     shadows: true,
     shadowSteps: 24,
     hapke: options.hapke ?? false,
+    ambient: options.ambient ?? 0,
     wireframe: false,
     elevation: true,
   };
   let previousQuery: Float64Array | undefined, previousInstances: TileInstances | undefined;
-  const shownHeights = () => (settings.elevation ? heightTiles : undefined);
+  const shownHeights = () => (settings.elevation ? terrain?.heights : undefined);
   const stats: TiledGlobeStats = {
     tiles: 0,
     triangles: 0,
@@ -420,25 +422,42 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     elevationAvailable: false,
     imageryStatus: "Loading",
     elevationStatus: options.elevation ? "Waiting for imagery" : "No elevation configured",
+    loaded: false,
   };
   const produce = createTileProducer(capacity, (tiles, query) =>
     selectAdaptiveTiles(tiles, query, shownHeights()),
   );
   const heightAt = (x: number, y: number, z: number) =>
     shownHeights()?.sampleDirection(x, y, z) ?? 0;
-  function updateElevationBounds() {
-    const field = shownHeights()?.manifest;
-    // The horizon test needs a sphere inside the surface, so it allows for the flattening.
-    view[VIEW.MinElevation] = (field ? Math.min(0, field.minMeters) : 0) - radius * flattening;
-    view[VIEW.MaxElevation] = field ? Math.max(0, field.maxMeters) : 0;
+  function sampleHeight(x: number, y: number, z: number): HeightSample {
+    const heights = shownHeights();
+    if (!heights)
+      return { height: 0, verticalDatum: "ellipsoid", level: undefined, spacing: undefined };
+    const { height, level, angle } = heights.sampleSource(x, y, z);
+    return {
+      height,
+      verticalDatum: heights.source.verticalDatum,
+      level,
+      spacing: angle === undefined ? undefined : angle * radius,
+    };
   }
 
   let overview: THREE.Texture | undefined,
     nightLights: THREE.Texture | undefined,
     waterMask: THREE.Texture | undefined,
-    imagery: ReturnType<typeof createImageryCache> | undefined,
     terrain: ReturnType<typeof createTileLayer> | undefined,
-    manifest: Awaited<ReturnType<typeof loadImageryManifest>> | undefined;
+    dataset: Awaited<ReturnType<typeof resolveImagery>>["dataset"];
+  const context: SourceContext = { url, body, signal, report };
+
+  // The terrain disposes these once it exists. A cancel before that has to free them,
+  // including when dispose ran during the load and the texture arrives afterwards.
+  function releasePendingTextures() {
+    if (terrain) return;
+    overview?.dispose();
+    nightLights?.dispose();
+    waterMask?.dispose();
+    overview = nightLights = waterMask = undefined;
+  }
 
   async function loadTexture(
     source: string | THREE.Texture | undefined,
@@ -469,31 +488,19 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       report(error);
       return undefined;
     });
-    if (signal.aborted) return;
-    const manifestURL = options.imagery ? url(options.imagery) : undefined;
-    if (manifestURL)
-      // Without tiled imagery the globe still draws its overview (or neutral terrain).
-      manifest = await loadImageryManifest(manifestURL, body, signal).catch((error) => {
-        report(error);
-        return undefined;
-      });
-    if (signal.aborted) return;
-    if (manifest && manifestURL)
-      imagery = createImageryCache(
-        manifest,
-        manifestURL,
-        capacity,
-        changed,
-        undefined,
-        options.imagerySlots ?? 128,
-        { onError: report },
-      );
+    if (signal.aborted) return releasePendingTextures();
+    // Without tiled imagery the globe still draws its overview (or neutral terrain).
+    const resolved = await resolveImagery(options.imagery, context);
+    const imagerySource = resolved.source;
+    dataset = resolved.dataset;
+    if (signal.aborted) return releasePendingTextures();
     terrain = createTileLayer({
       radiusMeters: radius,
       segments,
       instances: createTileInstances(capacity),
       overview,
-      imagery,
+      imagery: imagerySource,
+      imagerySlots: options.imagerySlots,
       caches: options.caches,
       nightLights,
       waterMask,
@@ -504,60 +511,53 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     });
     // Picking goes through the globe's own raycast, not the instanced grid.
     terrain.group.traverse((object) => (object.raycast = () => {}));
-    settings.layer ??= manifest ? "imagery" : overview ? "overview" : "terrain";
+    settings.layer ??= terrain.hasImagery ? "imagery" : overview ? "overview" : "terrain";
     const { elevation: _elevation, ...display } = settings;
     terrain.set({ ...display, layer: settings.layer, elevation: false });
     globe.add(terrain.group);
-    stats.imageryAvailable = !!imagery;
-    stats.imageryStatus = imagery?.status() ?? (overview ? "Overview" : "No imagery");
+    stats.imageryAvailable = terrain.hasImagery;
+    stats.imageryStatus = imageryStatus();
     changed();
   }
 
   async function loadOptionalData() {
-    if (options.regions && imagery && manifest) {
+    if (options.regions && terrain?.hasImagery && dataset) {
+      const { manifest, source: regional } = dataset;
       void loadRegionalCatalog(url(options.regions), manifest, signal)
         .then((catalog) => {
-          if (!signal.aborted && catalog) imagery!.setRegions(catalog, url(options.regions!));
+          if (signal.aborted || !catalog) return;
+          regional.setRegions(catalog, url(options.regions!));
+          terrain?.refreshImagery();
         })
         .catch(report);
     }
     if (!options.elevation || !terrain) return;
     stats.elevationStatus = "Loading elevation";
     changed();
-    const heightsURL = url(options.elevation);
-    const heightManifest = await loadHeightTiles(heightsURL, signal, body).catch((error) => {
-      report(error);
-      return undefined;
-    });
+    const heights = await resolveHeights(options.elevation, flattening, context);
     if (signal.aborted) return;
-    if (!heightManifest) {
+    if (!heights) {
       stats.elevationStatus = "Elevation unavailable";
       changed();
       return;
     }
-    heightTiles = createHeightTileCache(
-      heightManifest,
-      heightsURL,
-      capacity,
-      () => {
-        previousQuery = undefined;
-        changed();
-      },
-      undefined,
-      options.heightSlots ?? 64,
-      { onError: report },
-    );
-    terrain.setHeightTiles(heightTiles);
+    terrain.setHeights(heights, options.heightSlots ?? 128, () => {
+      previousQuery = undefined;
+      changed();
+    });
     stats.elevationAvailable = true;
     applyElevation();
   }
 
+  const imageryStatus = () => terrain?.imageryStatus() ?? (overview ? "Overview" : "No imagery");
+
   function applyElevation() {
-    updateElevationBounds();
+    cameraView.setHeights(shownHeights()?.source);
     terrain?.set({ elevation: settings.elevation });
     previousQuery = undefined;
   }
 
+  let dataLoaded = false;
   const ready = (async () => {
     try {
       await loadSurface();
@@ -568,6 +568,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
         stats.elevationStatus = "Elevation unavailable";
       changed();
     }
+    dataLoaded = true;
   })();
 
   function update(
@@ -577,16 +578,17 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     now: number,
   ) {
     if (signal.aborted || !terrain) return;
-    heightTiles?.advance(now);
+    terrain.advance(now);
     globe.sunDirection(sun);
     const reversedDepth = renderer.reversedDepthBuffer === true || camera.reversedDepth;
-    updateView(camera, reversedDepth, bufferHeight);
+    cameraView.update(globe, camera, reversedDepth, bufferHeight);
     // An Atmosphere child colours the ground's sunlight and adds sky light. Found by
     // shape, not imported, so globes without one never load the atmosphere code.
     const atmosphere = globe.children.find(
       (child): child is Atmosphere => (child as Partial<Atmosphere>).isAtmosphere === true,
     );
     const light = atmosphere?.update(renderer, camera, { reversedDepth, bufferHeight }) ?? null;
+    const cameraPosition = cameraView.position;
     const altitude = globe.altitudeOf(cameraPosition);
     const overlays = globe.children.filter(
       (child): child is SurfaceOverlay =>
@@ -600,11 +602,13 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       camera: cameraPosition,
     };
     for (const overlay of overlays) overlay.update(overlayView);
+    // Masks are anchors: place them before the terrain reads where they are.
+    placeChildren(globe, cameraPosition, cameraView.forward);
+    const masks = globe.children.filter(
+      (child): child is TerrainMask => (child as Partial<TerrainMask>).isTerrainMask === true,
+    );
     const started = performance.now();
-    const viewChanged =
-      previousInstances?.buffer.byteLength === 0 ||
-      !previousQuery ||
-      view.some((v, i) => v !== previousQuery![i]);
+    const viewChanged = !previousQuery || view.some((v, i) => v !== previousQuery![i]);
     const instances = viewChanged ? produce(view) : previousInstances!;
     if (viewChanged) {
       previousQuery = view.slice();
@@ -615,13 +619,15 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
       renderer,
       instances,
       view: {
-        clipFromRelative: projectionView.elements,
+        clipFromRelative: cameraView.projectionView.elements,
         projectionScale: view[VIEW.ProjectionScale],
         now,
       },
       sun,
       altitude,
       overlays,
+      masks,
+      camera: cameraPosition,
       light,
     });
     stats.terrainCaches = terrain.cacheStats();
@@ -631,34 +637,14 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     for (let i = 0; i < instances.count; i++)
       stats.deepestLevel = Math.max(
         stats.deepestLevel,
-        Math.round(Math.log2(radius / instances.sizes[i * 2])),
+        Math.round(Math.log2(radius / instances.sizes[i])),
       );
-    stats.imageryStatus = imagery?.status() ?? (overview ? "Overview" : "No imagery");
-    if (heightTiles) stats.elevationStatus = heightTiles.status();
-    placeLabels(globe);
-    if (imagery?.needsFrame() || heightTiles?.needsFrame()) changed();
-  }
-
-  // Lift labels onto the terrain and hide those behind the horizon. A hidden
-  // parent hides its labels, so only visible branches are walked.
-  const labelPoint = new THREE.Vector3();
-  function placeLabels(object: THREE.Object3D) {
-    for (const child of object.children) {
-      if ((child as GlobeLabel).isGlobeLabel) {
-        const label = child as GlobeLabel;
-        const { latitude, longitude, altitude } = label;
-        const ground =
-          label.altitudeReference === "ellipsoid"
-            ? globe.heightAt(geographicToDirection(latitude, longitude, labelPoint))
-            : 0;
-        globe.positionAt(latitude, longitude, altitude - ground, label.position);
-        labelPoint.copy(label.position).normalize();
-        const toCamera = _toward.copy(cameraPosition).sub(label.position);
-        label.visible =
-          labelPoint.dot(toCamera) > 0 && // above the horizon
-          toCamera.dot(cameraForward) < 0; // in front of the camera
-      } else if (child.visible) placeLabels(child);
-    }
+    stats.imageryStatus = imageryStatus();
+    stats.elevationStatus = terrain.elevationStatus() ?? stats.elevationStatus;
+    if (terrain.needsFrame()) changed();
+    const loaded = dataLoaded && terrain.settled();
+    if (loaded && !stats.loaded) globe.dispatchEvent({ type: "loaded" });
+    stats.loaded = loaded;
   }
 
   return {
@@ -666,6 +652,7 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     ready,
     settings: settings as Readonly<Settings>,
     heightAt,
+    sampleHeight,
     update,
     set(next: Partial<Settings>) {
       if (next.shadowSteps !== undefined && !Number.isFinite(next.shadowSteps))
@@ -680,16 +667,10 @@ function createTerrain(globe: TiledGlobe, options: TiledGlobeOptions) {
     dispose() {
       if (signal.aborted) return;
       controller.abort();
-      heightTiles?.dispose();
-      imagery?.dispose();
       if (terrain) {
         terrain.group.removeFromParent();
         terrain.dispose();
-      } else {
-        overview?.dispose();
-        nightLights?.dispose();
-        waterMask?.dispose();
-      }
+      } else releasePendingTextures();
     },
   };
 }

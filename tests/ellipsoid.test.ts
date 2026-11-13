@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Vector3 } from "three/webgpu";
-import { sphereDistance } from "../src/orbit.ts";
 import { altitudeOf, ellipsoidDistance, ellipsoidOffset, toSphere } from "../src/ellipsoid.ts";
 import { geographicToDirection } from "../src/geographic.ts";
 
@@ -50,5 +49,5 @@ test("a sphere is unchanged", () => {
 
 test("a ray from above the pole stops at the polar surface, not the equatorial radius", () => {
   const ray = { origin: new Vector3(0, b + 1000, 0), direction: new Vector3(0, -1, 0) };
-  assert.ok(Math.abs(ellipsoidDistance(ray, a, f, sphereDistance)! - 1000) < 1e-3);
+  assert.ok(Math.abs(ellipsoidDistance(ray, a, f)! - 1000) < 1e-3);
 });

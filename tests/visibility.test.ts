@@ -22,6 +22,9 @@ function query(position) {
   camera.lookAt(0, 0, 0);
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
+  // Reversed depth is 1 - z: the projection's depth row, taken from its w row.
+  const m = camera.projectionMatrix.elements;
+  for (let column = 0; column < 16; column += 4) m[column + 2] = m[column + 3] - m[column + 2];
   const relative = new PerspectiveCamera();
   relative.quaternion.copy(camera.quaternion);
   relative.updateMatrixWorld();
@@ -51,35 +54,37 @@ function address(point) {
     ax = Math.abs(x),
     ay = Math.abs(y),
     az = Math.abs(z);
-  let face, u, v, w;
+  let root, u, v, w;
   if (ax >= ay && ax >= az) {
-    face = x > 0 ? 0 : 1;
+    root = x > 0 ? 0 : 1;
     w = ax;
     u = x > 0 ? -z : z;
     v = y;
   } else if (ay >= az) {
-    face = y > 0 ? 2 : 3;
+    root = y > 0 ? 2 : 3;
     w = ay;
     u = x;
     v = y > 0 ? -z : z;
   } else {
-    face = z > 0 ? 4 : 5;
+    root = z > 0 ? 4 : 5;
     w = az;
     u = z > 0 ? x : -x;
     v = y;
   }
-  return [face, (u / w + 1) / 2, (v / w + 1) / 2];
+  return [root, (u / w + 1) / 2, (v / w + 1) / 2];
 }
 
 test("reversed depth keeps a 10 m surface inside the selection frustum", () => {
   const altitude = 10;
   const camera = new PerspectiveCamera(75, 1.5, 0.2, radius * 3 + altitude);
   camera.coordinateSystem = WebGPUCoordinateSystem;
-  (camera as unknown as { _reversedDepth: boolean })._reversedDepth = true;
   camera.position.set(0, 0, radius + altitude);
   camera.lookAt(0, 0, 0);
   camera.updateProjectionMatrix();
   camera.updateMatrixWorld();
+  // Reversed depth is 1 - z: the projection's depth row, taken from its w row.
+  const m = camera.projectionMatrix.elements;
+  for (let column = 0; column < 16; column += 4) m[column + 2] = m[column + 3] - m[column + 2];
   const relative = new PerspectiveCamera();
   relative.quaternion.copy(camera.quaternion);
   relative.projectionMatrix.copy(camera.projectionMatrix);
@@ -91,7 +96,7 @@ test("reversed depth keeps a 10 m surface inside the selection frustum", () => {
   const frustum = new Frustum().setFromProjectionMatrix(
     projectionView,
     WebGPUCoordinateSystem,
-    camera.reversedDepth,
+    true,
   );
   const surface = new Vector3(0, 0, -altitude);
   assert.equal(frustum.containsPoint(surface), true);

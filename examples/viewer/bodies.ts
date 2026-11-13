@@ -17,6 +17,8 @@ export const BODIES = {
     credit:
       "Sentinel-2 cloudless by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2020), CC BY-NC-SA 4.0. Clouds: NASA Goddard Space Flight Center, Reto Stöckli",
     imagery: "data/earth/s2cloudless-2020-z7/manifest.json",
+    // The Minimal look. Natural Earth land as two-tone tiles.
+    map: "data/earth/land/manifest.json",
     elevation: "data/earth/elevation-tiles/manifest.json",
     // NASA Black Marble 2016, resampled to 8192×4096. https://science.nasa.gov/earth/earth-observatory/earth-at-night/maps/
     nightLights: "data/earth/night-lights/black-marble-2016.jpg",
@@ -52,7 +54,7 @@ export function bodyId(value: string | null): BodyId {
   return value && Object.hasOwn(BODIES, value) ? (value as BodyId) : "earth";
 }
 
-/** Same centers as tile-service datasets/earth-sites.json. The 2 km disks are the launch pads. */
+/** Launch pads with detailed imagery. */
 export const EARTH_SITES = [
   { label: "Starbase", latitudeDeg: 25.997, longitudeDeg: -97.157 },
   { label: "Kennedy Space Center", latitudeDeg: 28.608389, longitudeDeg: -80.604333 },

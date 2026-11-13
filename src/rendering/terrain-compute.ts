@@ -1,5 +1,5 @@
 import * as THREE from "three/webgpu";
-import { Fn, instanceIndex, uvec2, uniform, texture, textureStore, wgslFn } from "three/tsl";
+import { Fn, instanceIndex, uvec2, uniform, textureStore, wgslFn } from "three/tsl";
 import gradientShader from "./shaders/height-gradient.wgsl?raw";
 import decodeHeightShader from "./shaders/decode-height.wgsl?raw";
 import bakeShader from "./shaders/bake-sunlight.wgsl?raw";
@@ -42,6 +42,7 @@ export interface TerrainComputeNodes {
   gutter: THREE.Node;
   maxLevel: THREE.Node;
   steps: THREE.Node;
+  encoding: THREE.Node;
 }
 /** Own derived textures; dispatch only through Three.js so GPU ownership stays unified. */
 export function createTerrainCompute(
@@ -74,8 +75,9 @@ export function createTerrainCompute(
   const flags = new Float32Array(heights.bindings.data.length / HEIGHT_STRIDE);
   const sourceLayer = uniform(0),
     destination = uniform(new THREE.Vector2());
-  const jobFace = uniform(new THREE.Vector4()),
-    jobRotation = uniform(new THREE.Vector2());
+  const jobTile = uniform(new THREE.Vector3()),
+    jobRoot = uniform(0),
+    jobTileMeters = uniform(0);
   const jobLayers = uniform(new THREE.Vector2()),
     jobBest = uniform(new THREE.Vector4()),
     jobParent = uniform(new THREE.Vector4());
@@ -86,7 +88,12 @@ export function createTerrainCompute(
     const store = textureStore(
       gradients,
       coord,
-      gradientFn({ heightTiles: nodes.heightTiles, coord, layer: sourceLayer }),
+      gradientFn({
+        heightTiles: nodes.heightTiles,
+        coord,
+        layer: sourceLayer,
+        encoding: nodes.encoding,
+      }),
     );
     store.depthNode = sourceLayer;
   })()
@@ -103,8 +110,9 @@ export function createTerrainCompute(
       ...nodes,
       coord,
       segments: uniform(segments),
-      faceUV: jobFace,
-      rotation: jobRotation,
+      rootUV: jobTile,
+      root: jobRoot,
+      tileMeters: jobTileMeters,
       layers: jobLayers,
       bestUV: jobBest,
       parentUV: jobParent,
@@ -160,17 +168,27 @@ export function createTerrainCompute(
     stats.sunlightReady = sunState.ready;
     stats.bytes = width * width * depth * 8 + columns * rows * grid * grid * 4;
   }
-  function prepare(
-    renderer: THREE.WebGPURenderer,
-    instances: TileInstances,
-    now: number,
-    epoch: string,
-    activeNormals: boolean,
-    activeSunlight: boolean,
-    view: StreamingView,
-    requestRender: () => void,
-    report: (error: unknown) => void,
-  ) {
+  function prepare({
+    renderer,
+    instances,
+    now,
+    epoch,
+    activeNormals,
+    activeSunlight,
+    view,
+    requestRender,
+    report,
+  }: {
+    renderer: THREE.WebGPURenderer;
+    instances: TileInstances;
+    now: number;
+    epoch: string;
+    activeNormals: boolean;
+    activeSunlight: boolean;
+    view: StreamingView;
+    requestRender: () => void;
+    report: (error: unknown) => void;
+  }) {
     flags.fill(0, 0, instances.count);
     stats.fallbackTiles = instances.count;
     const changedAt = sunState.begin(`${heights.revision}/${epoch}`, now);
@@ -229,16 +247,17 @@ export function createTerrainCompute(
       if (order)
         for (const i of order) {
           const b = i * HEIGHT_STRIDE,
-            j = i * 4;
+            j = i * 3;
           if (heights.bindings.data[b + PAIR.blend] < 1 || heights.bindings.data[b] < 0.5) continue;
-          const key = `${instances.faces[i]}/${instances.faceUVs[j]}/${instances.faceUVs[j + 1]}/${instances.faceUVs[j + 2]}`;
+          const key = `${instances.roots[i]}/${instances.rootUVs[j]}/${instances.rootUVs[j + 1]}/${instances.rootUVs[j + 2]}`;
           const entry = sunState.touch(key, heights.bindings.data, b);
           if (!entry) continue;
           if (!entry.ready) {
             if (sunBudget > 0) {
               sunBudget--;
-              jobFace.value.fromArray(instances.faceUVs, j);
-              jobRotation.value.fromArray(instances.rotations, i * 2);
+              jobTile.value.fromArray(instances.rootUVs, j);
+              jobRoot.value = instances.roots[i];
+              jobTileMeters.value = instances.sizes[i];
               jobLayers.value.fromArray(heights.bindings.data, b + PAIR.layers);
               jobBest.value.fromArray(heights.bindings.data, b + PAIR.best);
               jobParent.value.fromArray(heights.bindings.data, b + PAIR.parent);

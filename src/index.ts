@@ -3,16 +3,20 @@ export {
   type TiledGlobeOptions,
   type TiledGlobeStats,
   type TiledGlobeEventMap,
+  type HeightSample,
   type SurfaceLayer,
 } from "./tiled-globe.ts";
 export { GlobeControls } from "./globe-controls.ts";
 export { GlobeLabel } from "./globe-label.ts";
+export { GlobeAnchor } from "./globe-anchor.ts";
+export { TerrainMask, MAX_TERRAIN_MASKS } from "./terrain-mask.ts";
 export { geographicToDirection } from "./geographic.ts";
 export { subsolarPoint } from "./sun-position.ts";
 export { Atmosphere } from "./atmosphere/atmosphere.ts";
 export { Clouds, type CloudsOptions } from "./atmosphere/clouds.ts";
 export {
   EARTH_AIR,
+  GLOW_AIR,
   MARS_AIR,
   marsAir,
   type AtmospherePreset,
@@ -28,6 +32,10 @@ export {
 } from "./overlay.ts";
 export { GeoJsonOverlay, type GeoJsonOverlayOptions } from "./geojson-overlay.ts";
 export { createBloom } from "./bloom.ts";
+export type { WmtsGrid, WmtsImagery, WmtsLayer } from "./imagery/wmts.ts";
+export type { ImagerySource } from "./imagery/source.ts";
+export type { HeightSource, HeightBounds } from "./elevation/source.ts";
+export type { TileAddress } from "./tiles/resident-tiles.ts";
 export { loadImageryManifest } from "./imagery/manifest.ts";
 export { createTileBytesLoader } from "./tiles/tile-source.ts";
 export { resolveDatasetURL } from "./data-url.ts";

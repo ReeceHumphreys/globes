@@ -1,9 +1,24 @@
-import { validateTileStorage, type PMTilesStorage } from "../tiles/tile-source.ts";
+import { relativePath, validateTileStorage, type PMTilesStorage } from "../tiles/tile-source.ts";
 import { matchesBody, type GlobeBody } from "../body.ts";
+import { MAX_LEVEL, parseTileKey, ROOT_COUNT, rootMaxLevel, tileKey } from "../tiles/roots.ts";
+/** How stored uint16 heights map to meters: value * scaleMeters + offsetMeters. */
+export interface HeightEncoding {
+  scaleMeters: number;
+  offsetMeters: number;
+}
+const TILE_PATH = relativePath("u16");
+const PAGE_PATH = relativePath("json");
+
 /** Meters from a stored uint16 height. decode-height.wgsl matches it. */
-export const heightMeters = (value: number) => value * 0.5 - 10000;
-/** The stored bytes of zero meters, little-endian. */
-export const ZERO_HEIGHT_BYTES = [32, 78] as const;
+export const heightMeters = (value: number, encoding: HeightEncoding) =>
+  value * encoding.scaleMeters + encoding.offsetMeters;
+
+/** The stored bytes nearest zero meters, little-endian. */
+export function zeroHeightBytes(encoding: HeightEncoding): [number, number] {
+  const stored = Math.round(-encoding.offsetMeters / encoding.scaleMeters);
+  const value = Math.max(0, Math.min(65535, stored));
+  return [value & 255, value >> 8];
+}
 export interface HeightTileInfo {
   path: string;
   min: number;
@@ -14,13 +29,15 @@ export interface HeightTileInfo {
 }
 export interface HeightTileManifest {
   storage?: PMTilesStorage;
-  version: 1;
+  version: 2;
   body: string;
   radiusMeters: number;
-  projection: "normalized-cube";
+  projection: "geographic-polar";
   format: "uint16-le";
-  scaleMeters: 0.5;
-  offsetMeters: -10000;
+  scaleMeters: number;
+  offsetMeters: number;
+  /** What heights are measured from, such as "ellipsoid", "sphere" or "areoid". */
+  verticalDatum: string;
   tileSize: number;
   gutter: number;
   maxLevel: number;
@@ -31,16 +48,58 @@ export interface HeightTileManifest {
   pages?: Record<string, { path: string; sha256: string; lower: number; upper: number }>;
   sources: { id: string; credit: string; sourcePage: string }[];
 }
+const validSource = (s: unknown) => {
+  const source = s as Record<string, unknown> | null;
+  return (
+    !!source &&
+    typeof source.id === "string" &&
+    typeof source.credit === "string" &&
+    typeof source.sourcePage === "string"
+  );
+};
+
+function validTile(
+  key: string,
+  t: HeightTileInfo,
+  m: HeightTileManifest,
+  find: (key: string) => HeightTileInfo | undefined,
+): void {
+  const address = parseTileKey(key);
+  if (!address) throw new Error("Invalid height tile address.");
+  const [root, level, x, y] = address;
+  if (
+    level > rootMaxLevel(root, m.maxLevel) ||
+    !t ||
+    typeof t.path !== "string" ||
+    !TILE_PATH.test(t.path) ||
+    ![t.min, t.max, t.lower, t.upper].every(Number.isFinite) ||
+    t.min > t.max ||
+    t.lower > t.min ||
+    t.upper < t.max ||
+    t.lower < m.minMeters ||
+    t.upper > m.maxMeters ||
+    !/^[a-f0-9]{64}$/.test(t.sha256)
+  )
+    throw new Error("Invalid height tile metadata.");
+  if (level > 0) {
+    const parent = find(tileKey(root, level - 1, x >> 1, y >> 1));
+    if (!parent || parent.lower > t.lower || parent.upper < t.upper)
+      throw new Error("Nonconservative height hierarchy.");
+  }
+}
+
 export function parseHeightTiles(value: unknown, expectedBody?: GlobeBody): HeightTileManifest {
   const m = value as HeightTileManifest;
   if (
     !m ||
-    m.version !== 1 ||
+    m.version !== 2 ||
     !matchesBody(m, expectedBody) ||
-    m.projection !== "normalized-cube" ||
+    m.projection !== "geographic-polar" ||
     m.format !== "uint16-le" ||
-    m.scaleMeters !== 0.5 ||
-    m.offsetMeters !== -10000 ||
+    !Number.isFinite(m.scaleMeters) ||
+    m.scaleMeters <= 0 ||
+    !Number.isFinite(m.offsetMeters) ||
+    typeof m.verticalDatum !== "string" ||
     !Number.isInteger(m.tileSize) ||
     m.tileSize < 16 ||
     m.tileSize > 256 ||
@@ -49,53 +108,30 @@ export function parseHeightTiles(value: unknown, expectedBody?: GlobeBody): Heig
     m.gutter > 8 ||
     !Number.isInteger(m.maxLevel) ||
     m.maxLevel < 0 ||
-    m.maxLevel > 20 ||
+    m.maxLevel > MAX_LEVEL ||
     !Number.isFinite(m.minMeters) ||
     !Number.isFinite(m.maxMeters) ||
-    m.minMeters < -10000 ||
-    m.maxMeters > 22767.5 ||
+    m.minMeters < m.offsetMeters ||
+    m.maxMeters > heightMeters(65535, m) ||
     m.minMeters > m.maxMeters ||
     !m.tiles ||
     typeof m.tiles !== "object" ||
-    !Array.isArray(m.sources)
+    !Array.isArray(m.sources) ||
+    !m.sources.every(validSource)
   )
     throw new Error("Unsupported height tile manifest.");
   const keys = Object.keys(m.tiles);
   if (keys.length > 200000) throw new Error("Height catalog exceeds metadata budget.");
-  for (let f = 0; f < 6; f++)
-    if (!m.tiles[`${f}/0/0/0`]) throw new Error("Height catalog requires all six roots.");
-  for (const key of keys) {
-    const t = m.tiles[key];
-    if (!/^[0-5]\/\d+\/\d+\/\d+$/.test(key)) throw new Error("Invalid height tile address.");
-    const [f, l, x, y] = key.split("/").map(Number);
-    if (
-      l > m.maxLevel ||
-      x >= 2 ** l ||
-      y >= 2 ** l ||
-      key !== `${f}/${l}/${x}/${y}` ||
-      !t ||
-      typeof t.path !== "string" ||
-      !/^([a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.u16$/.test(t.path) ||
-      ![t.min, t.max, t.lower, t.upper].every(Number.isFinite) ||
-      t.min > t.max ||
-      t.lower > t.min ||
-      t.upper < t.max ||
-      t.lower < m.minMeters ||
-      t.upper > m.maxMeters ||
-      !/^[a-f0-9]{64}$/.test(t.sha256)
-    )
-      throw new Error("Invalid height tile metadata.");
-    if (l > 0) {
-      const parent = m.tiles[`${f}/${l - 1}/${x >> 1}/${y >> 1}`];
-      if (!parent || parent.lower > t.lower || parent.upper < t.upper)
-        throw new Error("Nonconservative height hierarchy.");
-    }
-  }
-  if (m.pages) {
+  for (let root = 0; root < ROOT_COUNT; root++)
+    if (!m.tiles[tileKey(root, 0, 0, 0)]) throw new Error("Height catalog requires every root.");
+  for (const key of keys) validTile(key, m.tiles[key], m, (parent) => m.tiles[parent]);
+  if ("pages" in m || "pageLevel" in m) {
     if (
       !Number.isInteger(m.pageLevel) ||
       m.pageLevel! < 0 ||
-      m.pageLevel! > 5 ||
+      m.pageLevel! > 6 ||
+      !m.pages ||
+      typeof m.pages !== "object" ||
       Object.keys(m.pages).length > 8192
     )
       throw new Error("Invalid height page index.");
@@ -103,10 +139,10 @@ export function parseHeightTiles(value: unknown, expectedBody?: GlobeBody): Heig
       const parent = m.tiles[id];
       if (
         !parent ||
-        Number(id.split("/")[1]) !== m.pageLevel ||
+        parseTileKey(id)?.[1] !== m.pageLevel ||
         !page ||
         typeof page.path !== "string" ||
-        !/^([a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]+\.json$/.test(page.path) ||
+        !PAGE_PATH.test(page.path) ||
         !/^[a-f0-9]{64}$/.test(page.sha256) ||
         !Number.isFinite(page.lower) ||
         !Number.isFinite(page.upper) ||
@@ -126,11 +162,11 @@ export async function loadHeightTiles(url: string, signal?: AbortSignal, expecte
   if (!r.ok) throw new Error(`Height tile manifest: HTTP ${r.status}`);
   return parseHeightTiles(await r.json(), expectedBody);
 }
-export type HeightTileLoader = (url: string, signal: AbortSignal) => Promise<Uint8Array>;
 export function decodeHeightTile(
   bytes: Uint8Array,
   info: HeightTileInfo,
   width: number,
+  encoding: HeightEncoding,
 ): Uint16Array {
   if (bytes.byteLength !== width * width * 2) throw new Error("Height tile byte length mismatch.");
   const values = new Uint16Array(width * width),
@@ -142,11 +178,17 @@ export function decodeHeightTile(
     lo = Math.min(lo, v);
     hi = Math.max(hi, v);
   }
-  if (heightMeters(lo) !== info.min || heightMeters(hi) !== info.max)
+  if (heightMeters(lo, encoding) !== info.min || heightMeters(hi, encoding) !== info.max)
     throw new Error("Height tile range mismatch.");
   return values;
 }
-export function sampleTile(values: Uint16Array, width: number, x: number, y: number): number {
+export function sampleTile(
+  values: Uint16Array,
+  width: number,
+  x: number,
+  y: number,
+  encoding: HeightEncoding,
+): number {
   x = Math.max(0, Math.min(width - 1, x));
   y = Math.max(0, Math.min(width - 1, y));
   const x0 = Math.floor(x),
@@ -158,6 +200,7 @@ export function sampleTile(values: Uint16Array, width: number, x: number, y: num
   return heightMeters(
     (1 - fy) * ((1 - fx) * values[y0 * width + x0] + fx * values[y0 * width + x1]) +
       fy * ((1 - fx) * values[y1 * width + x0] + fx * values[y1 * width + x1]),
+    encoding,
   );
 }
 export function parseHeightPage(
@@ -168,12 +211,18 @@ export function parseHeightPage(
   const entries = (value as { tiles: Record<string, HeightTileInfo> })?.tiles;
   if (!entries || typeof entries !== "object" || Object.keys(entries).length > 20000)
     throw new Error("Invalid height metadata page.");
-  const [f, level, x, y] = prefix.split("/").map(Number);
-  for (const key of Object.keys(entries)) {
-    const [ff, l, xx, yy] = key.split("/").map(Number);
-    if (ff !== f || l <= level || xx >> (l - level) !== x || yy >> (l - level) !== y)
+  const [root, level, x, y] = parseTileKey(prefix)!;
+  for (const [key, tile] of Object.entries(entries)) {
+    const [tileRoot, l, tx, ty] = parseTileKey(key) ?? [];
+    if (
+      l === undefined ||
+      tileRoot !== root ||
+      l <= level ||
+      tx! >> (l - level) !== x ||
+      ty! >> (l - level) !== y
+    )
       throw new Error("Height metadata escaped its page.");
+    validTile(key, tile, manifest, (parent) => entries[parent] ?? manifest.tiles[parent]);
   }
-  parseHeightTiles({ ...manifest, tiles: { ...manifest.tiles, ...entries }, pages: undefined });
   return entries;
 }

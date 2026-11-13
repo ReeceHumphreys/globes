@@ -79,7 +79,9 @@ const VIEW_SIZE = [64, 128, 32] as const;
 
 const _bodyFromView = new THREE.Matrix4(),
   _stretch = new THREE.Matrix4(),
-  _camera = new THREE.Vector3();
+  _camera = new THREE.Vector3(),
+  _sun = new THREE.Vector3(),
+  _rgb = new Float64Array(3);
 
 /**
  * Air around a TiledGlobe: haze over the terrain and anything else drawn, the sky,
@@ -291,6 +293,25 @@ export class Atmosphere extends THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasic
     this.#gathered.dispose();
     this.#passed.dispose();
     this.removeFromParent();
+  }
+
+  /**
+   * Fraction of sunlight that reaches `point`, a position in the globe's frame, per linear
+   * channel: white above the air, dim and red near sunset, black in the planet's shadow.
+   * Multiply a light's color by it so models near the surface match the terrain's light.
+   * White until the atmosphere is added to a globe.
+   */
+  sunlightAt(point: THREE.Vector3, target = new THREE.Color()): THREE.Color {
+    const globe = this.parent as AtmosphereParent | null;
+    if (!globe?.sunDirection) return target.setRGB(1, 1, 1);
+    this.#lightFor(globe.radius);
+    // The same stretched frame the shaders use, where the ellipsoid is a sphere.
+    const y = point.y / (1 - globe.flattening);
+    const r = Math.hypot(point.x, y, point.z);
+    globe.sunDirection(_sun);
+    const mu = (_sun.x * point.x + _sun.y * y + _sun.z * point.z) / r;
+    this.#model!.transmittanceToSun(Math.max(r, this.#model!.bottom), mu, _rgb);
+    return target.setRGB(_rgb[0], _rgb[1], _rgb[2]);
   }
 
   /** Follow the camera and sun, and resolve this frame's light. The globe calls this. @internal */

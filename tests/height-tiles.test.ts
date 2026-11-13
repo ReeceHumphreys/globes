@@ -2,8 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { parseHeightTiles, decodeHeightTile, sampleTile } from "../src/elevation/tiles.ts";
-import { createHeightTileCache } from "../src/elevation/tile-cache.ts";
+import {
+  decodeHeightTile,
+  parseHeightPage,
+  parseHeightTiles,
+  sampleTile,
+  zeroHeightBytes,
+} from "../src/elevation/tiles.ts";
+import { createHeightTileCache as createCache } from "../src/elevation/tile-cache.ts";
+import { createDatasetHeights } from "../src/elevation/dataset-source.ts";
 import { HEIGHT_STRIDE } from "../src/rendering/binding-row.ts";
 import { createTileBatch } from "../src/tiles/tile.ts";
 import { createTileInstances, writeTileInstances } from "../src/rendering/tile-instances.ts";
@@ -26,14 +33,15 @@ function info(key, height, lower = height, upper = height) {
 }
 function fixture() {
   const tiles = {};
-  for (let f = 0; f < 6; f++)
+  for (let f = 0; f < 4; f++)
     tiles[`${f}/0/0/0`] = info(`${f}/0/0/0`, 1000, 1000, f === 0 ? 2000 : 1000);
   tiles["0/1/1/1"] = info("0/1/1/1", 2000);
   return parseHeightTiles({
-    version: 1,
+    version: 2,
     body: "Moon",
     radiusMeters: 1737400,
-    projection: "normalized-cube",
+    projection: "geographic-polar",
+    verticalDatum: "sphere",
     format: "uint16-le",
     scaleMeters: 0.5,
     offsetMeters: -10000,
@@ -46,14 +54,16 @@ function fixture() {
     sources: [],
   });
 }
+// Latitude 22.5, longitude -67.5: the middle of tile 0/2/2/2, inside 0/1/1/1.
+const probe = [0.35355339, 0.38268343, 0.85355339];
 function terrain() {
   const tiles = createTileBatch(1);
   tiles.count = 1;
-  tiles.face[0] = 0;
+  tiles.root[0] = 0;
   tiles.level[0] = 2;
   tiles.x[0] = tiles.y[0] = 2;
   const instances = createTileInstances(1);
-  writeTileInstances(tiles, instances, 1737400, 1738400, 0.1, -0.1);
+  writeTileInstances(tiles, instances, 1737400, ...probe.map((value) => value * 1738400));
   return instances;
 }
 const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
@@ -62,6 +72,13 @@ const view = (now) => ({
   clipFromRelative: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
   projectionScale: 800,
 });
+
+// A published dataset behind the HeightSource seam, as the globe builds it.
+function createHeightTileCache(manifest, url, capacity, onChange, load, limit, options = {}) {
+  const { fadeMs, loadPage, onError } = options;
+  const source = createDatasetHeights(manifest, url, { load, loadPage, onError });
+  return createCache(source, capacity, onChange, limit, { fadeMs, onError });
+}
 
 test("numeric height catalogs reject unsafe addresses, missing parents and nonconservative bounds", () => {
   const m = fixture();
@@ -72,8 +89,8 @@ test("numeric height catalogs reject unsafe addresses, missing parents and nonco
   const bad = structuredClone(m);
   bad.tiles["0/1/1/1"].path = "../escape.u16";
   assert.throws(() => parseHeightTiles(bad));
-  assert.throws(() => decodeHeightTile(new Uint8Array(1), m.tiles["0/0/0/0"], width));
-  assert.throws(() => decodeHeightTile(bytes(1001), m.tiles["0/0/0/0"], width), /range/);
+  assert.throws(() => decodeHeightTile(new Uint8Array(1), m.tiles["0/0/0/0"], width, m));
+  assert.throws(() => decodeHeightTile(bytes(1001), m.tiles["0/0/0/0"], width, m), /range/);
 });
 
 test("CPU clearance and GPU bindings share parent/fine height fades with no unbounded requests", async () => {
@@ -94,7 +111,9 @@ test("CPU clearance and GPU bindings share parent/fine height fades with no unbo
   try {
     cache.update(instances, view(0));
     assert.equal(requests.length, 4);
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 0);
+    assert.equal(cache.sampleDirection(...probe), 0);
+    assert.equal(cache.settled(), false);
+    assert.equal(cache.sampleSource(...probe).level, undefined);
     async function resolveRoots() {
       for (let round = 0; round < 6; round++) {
         for (const r of requests)
@@ -107,18 +126,18 @@ test("CPU clearance and GPU bindings share parent/fine height fades with no unbo
     }
     await resolveRoots();
     cache.update(instances, view(0));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 0);
+    assert.equal(cache.sampleDirection(...probe), 0);
     cache.update(instances, view(100));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 1000);
+    assert.equal(cache.sampleDirection(...probe), 1000);
     const child = requests.find((r) => r.url.endsWith("/0/1/1/1.u16"));
     assert.ok(child);
     child.done = true;
     child.resolve(bytes(2000));
     await tick();
     cache.update(instances, view(100));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 1000);
+    assert.equal(cache.sampleDirection(...probe), 1000);
     cache.update(instances, view(150));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 1500);
+    assert.equal(cache.sampleDirection(...probe), 1500);
     assert.equal(cache.bindings.data[10], 0.5);
     const data = cache.bindings.data,
       slot = data[0],
@@ -136,17 +155,24 @@ test("CPU clearance and GPU bindings share parent/fine height fades with no unbo
         width,
         (data[2] + uv[0] * data[4]) * width - 0.5,
         (data[3] + uv[1] * data[5]) * width - 0.5,
+        fixture(),
       ),
       coarse = sampleTile(
         gridFor(parent),
         width,
         (data[6] + uv[0] * data[8]) * width - 0.5,
         (data[7] + uv[1] * data[9]) * width - 0.5,
+        fixture(),
       );
-    assert.equal(coarse * (1 - data[10]) + fine * data[10], cache.sampleDirection(1, 0.2, -0.2));
+    assert.equal(coarse * (1 - data[10]) + fine * data[10], cache.sampleDirection(...probe));
     cache.update(instances, view(200));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 2000);
+    assert.equal(cache.sampleDirection(...probe), 2000);
     assert.equal(cache.needsFrame(), false);
+    assert.equal(cache.settled(), true);
+    const source = cache.sampleSource(...probe);
+    assert.equal(source.height, 2000);
+    assert.equal(source.level, 1);
+    assert.ok(Math.abs(source.angle - Math.PI / 2 / 16) < 1e-12);
     assert.ok(cache.stats().resident <= 8);
     assert.ok(cache.stats().wanted <= 8);
     const range = new Float64Array(2);
@@ -181,7 +207,7 @@ test("failed or corrupt fine heights leave coarse geometry available; disposal a
       await tick();
       cache.update(instances, view(i));
     }
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 1000);
+    assert.equal(cache.sampleDirection(...probe), 1000);
     assert.equal(bad, 3);
     assert.equal(cache.stats().failed, 1);
   } finally {
@@ -247,6 +273,54 @@ test("a failed metadata page reaches onError, through the load seam", async () =
   }
 });
 
+test("a metadata page loads after two failed attempts", async () => {
+  const m = fixture(),
+    fine = m.tiles["0/1/1/1"];
+  delete m.tiles["0/1/1/1"];
+  const pageBytes = new TextEncoder().encode(JSON.stringify({ tiles: { "0/1/1/1": fine } }));
+  m.pageLevel = 0;
+  m.pages = {
+    "0/0/0/0": {
+      path: "metadata/0/0/0/0.json",
+      lower: 1000,
+      upper: 2000,
+      sha256: createHash("sha256").update(pageBytes).digest("hex"),
+    },
+  };
+  parseHeightTiles(m);
+  let tries = 0;
+  const errors = [];
+  const cache = createHeightTileCache(
+    m,
+    "https://example.test/heights/manifest.json",
+    1,
+    () => {},
+    async (url) => bytes(url.endsWith("/1/1/1.u16") ? 2000 : 1000),
+    8,
+    {
+      fadeMs: 0,
+      loadPage: async () => {
+        tries++;
+        if (tries < 3) throw new Error("offline");
+        return pageBytes;
+      },
+      onError: (error) => errors.push(error),
+    },
+  );
+  try {
+    const instances = terrain();
+    for (let i = 0; i < 12; i++) {
+      cache.update(instances, view(i));
+      await tick();
+    }
+    assert.equal(errors.length, 0);
+    assert.equal(tries, 3);
+    assert.equal(cache.sampleDirection(...probe), 2000);
+  } finally {
+    cache.dispose();
+  }
+});
+
 test("camera sampling respects the geometry level even when finer heights are prefetched", async () => {
   const cache = createHeightTileCache(
     fixture(),
@@ -258,16 +332,16 @@ test("camera sampling respects the geometry level even when finer heights are pr
     { fadeMs: 0 },
   );
   const coarse = terrain();
-  coarse.faceUVs.set([0, 0, 1, 1]);
+  coarse.rootUVs.set([0, 0, 1]);
   try {
     for (let i = 0; i < 12; i++) {
       cache.update(coarse, view(i));
       await tick();
     }
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 1000);
-    assert.ok(cache.stats().resident >= 7);
+    assert.equal(cache.sampleDirection(...probe), 1000);
+    assert.ok(cache.stats().resident >= 5);
     cache.update(terrain(), view(20));
-    assert.equal(cache.sampleDirection(1, 0.2, -0.2), 2000);
+    assert.equal(cache.sampleDirection(...probe), 2000);
   } finally {
     cache.dispose();
   }
@@ -295,4 +369,19 @@ test("late root downloads begin their fade on the revealing frame, including the
   assert.equal(cache.bindings.data[10], 0.5);
   assert.equal(cache.shadowIndex.image.data[5], 0.5);
   cache.dispose();
+});
+
+test("a page is checked on its own, against the tiles above it", () => {
+  const big = { ...fixture(), maxLevel: 2 };
+  const page = { "0/2/2/2": info("0/2/2/2", 2000) };
+  assert.deepEqual(parseHeightPage({ tiles: page }, "0/1/1/1", big), page);
+  assert.throws(() => parseHeightPage({ tiles: page }, "0/1/0/0", big), /escaped/);
+  const outside = { "0/2/2/2": { ...page["0/2/2/2"], upper: 2001 } };
+  assert.throws(() => parseHeightPage({ tiles: outside }, "0/1/1/1", big));
+});
+
+test("zero meters clamps to the nearest stored value", () => {
+  assert.deepEqual(zeroHeightBytes({ scaleMeters: 0.5, offsetMeters: 100 }), [0, 0]);
+  assert.deepEqual(zeroHeightBytes({ scaleMeters: 0.5, offsetMeters: -40000 }), [255, 255]);
+  assert.deepEqual(zeroHeightBytes({ scaleMeters: 0.5, offsetMeters: -10000 }), [32, 78]);
 });

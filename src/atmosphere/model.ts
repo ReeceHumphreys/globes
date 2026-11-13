@@ -63,6 +63,15 @@ export interface AtmospherePreset {
   };
 }
 
+/** No air, only a white glow around the limb, whatever the sun is doing. For drawn maps. */
+export const GLOW_AIR: AtmospherePreset = {
+  height: 400_000,
+  rayleigh: { scattering: [0, 0, 0], scaleHeight: 8_000 },
+  mie: { scattering: [0, 0, 0], extinction: [0, 0, 0], scaleHeight: 1_200, g: 0.8 },
+  intensity: 1,
+  airglow: { emission: [1e-7, 1e-7, 1e-7], altitude: 60_000, width: 110_000 },
+};
+
 /** Clear-sky Earth (Hillaire 2020 / Bruneton 2017 coefficients, 680/550/440 nm). */
 export const EARTH_AIR: AtmospherePreset = {
   height: 100_000,

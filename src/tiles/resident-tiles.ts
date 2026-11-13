@@ -1,8 +1,8 @@
-import type { TileInstances } from "../rendering/tile-instances.ts";
-import { facePoint } from "./roots.ts";
+import { instanceCenter, instanceLevel, type TileInstances } from "../rendering/tile-instances.ts";
+import { ROOT_COUNT, rootLevel, rootMaxLevel, rootPoint, tileKey } from "./roots.ts";
 
 export interface TileAddress {
-  face: number;
+  root: number;
   level: number;
   x: number;
   y: number;
@@ -31,7 +31,7 @@ export interface ResidentTilesOptions<Payload, Extra> {
   /** Finest level the source can supply. Read on every plan. */
   maxLevel(): number;
   /** Whether the source publishes this address. Unavailable tiles are never planned or drawn. */
-  available(face: number, level: number, x: number, y: number): boolean;
+  available(root: number, level: number, x: number, y: number): boolean;
   /** Fetch, validate and decode one tile. Rejection counts as one failed attempt. */
   load(tile: TileAddress, signal: AbortSignal): Promise<Payload>;
   /** Upload a loaded payload into `slot`; the returned fields are kept on the record. */
@@ -52,22 +52,6 @@ const ROOT_PRIORITY = 1e20;
 const GROUND_PRIORITY = 1e18;
 export const DEFAULT_FADE_MS = 300;
 
-export const tileKey = (face: number, level: number, x: number, y: number) =>
-  `${face}/${level}/${x}/${y}`;
-
-/** Level of a drawn instance, from its face-UV extent. */
-export const instanceLevel = (instances: TileInstances, i: number) =>
-  Math.round(-Math.log2(instances.faceUVs[i * 4 + 2]));
-
-/** Center of a drawn instance on its face. */
-export const instanceCenter = (instances: TileInstances, i: number): [number, number] => {
-  const j = i * 4;
-  return [
-    instances.faceUVs[j] + instances.faceUVs[j + 2] / 2,
-    instances.faceUVs[j + 1] + instances.faceUVs[j + 3] / 2,
-  ];
-};
-
 /** Eased 0..1 progress of a fade. One that has not started is 0, and a zero duration is 1. */
 export function fadeWeight(start: number | undefined, now: number, fadeMs: number): number {
   if (start === undefined) return 0;
@@ -75,15 +59,20 @@ export function fadeWeight(start: number | undefined, now: number, fadeMs: numbe
   return t * t * (3 - 2 * t);
 }
 
-export function addressAt(face: number, level: number, u: number, v: number): TileAddress {
+export function addressAt(root: number, level: number, u: number, v: number): TileAddress {
   const n = 2 ** level;
   return {
-    face,
+    root,
     level,
     x: Math.min(n - 1, Math.max(0, Math.floor(u * n))),
     y: Math.min(n - 1, Math.max(0, Math.floor(v * n))),
   };
 }
+
+export const tileKeyAt = (root: number, level: number, u: number, v: number) => {
+  const { x, y } = addressAt(root, level, u, v);
+  return tileKey(root, level, x, y);
+};
 
 /**
  * A bounded set of streamed quadtree tiles resident in texture-array slots.
@@ -95,19 +84,14 @@ export function addressAt(face: number, level: number, u: number, v: number): Ti
  * four at a time, and gives up on a tile after three failures. `pair` returns
  * the finest resident tile at a point and the parent it is fading in over.
  */
-export const tileKeyAt = (face: number, level: number, u: number, v: number) => {
-  const { x, y } = addressAt(face, level, u, v);
-  return tileKey(face, level, x, y);
-};
-
 export function createResidentTiles<Payload, Extra extends object = object>(
   options: ResidentTilesOptions<Payload, Extra>,
 ) {
   type Record = ResidentTile & Extra;
   type Wanted = TileAddress & { key: string; priority: number };
   const { slots: limit } = options;
-  if (!Number.isInteger(limit) || limit < 6 || limit > 255)
-    throw new RangeError(`${options.label} slots must be 6..255.`);
+  if (!Number.isInteger(limit) || limit < ROOT_COUNT || limit > 255)
+    throw new RangeError(`${options.label} slots must be ${ROOT_COUNT}..255.`);
   const ready = new Map<string, Record>();
   const pending = new Map<string, { controller: AbortController; speculative: boolean }>();
   const failed = new Set<string>();
@@ -125,10 +109,10 @@ export function createResidentTiles<Payload, Extra extends object = object>(
 
   const desired = (key: string) => wanted.has(key) || prefetch.has(key);
   const missing = (key: string) => !ready.has(key) && !failed.has(key);
-  function candidate(face: number, level: number, u: number, v: number, priority: number) {
-    const address = addressAt(face, level, u, v);
-    if (!options.available(address.face, address.level, address.x, address.y)) return undefined;
-    return { ...address, key: tileKey(face, level, address.x, address.y), priority };
+  function candidate(root: number, level: number, u: number, v: number, priority: number) {
+    const address = addressAt(root, level, u, v);
+    if (!options.available(address.root, address.level, address.x, address.y)) return undefined;
+    return { ...address, key: tileKey(root, level, address.x, address.y), priority };
   }
 
   function allocate(speculative: boolean): number | undefined {
@@ -146,7 +130,7 @@ export function createResidentTiles<Payload, Extra extends object = object>(
   function start(item: Wanted, speculative: boolean) {
     const controller = new AbortController();
     pending.set(item.key, { controller, speculative });
-    const address = { face: item.face, level: item.level, x: item.x, y: item.y };
+    const address = { root: item.root, level: item.level, x: item.x, y: item.y };
     void options
       .load(address, controller.signal)
       .then((payload) => {
@@ -163,7 +147,8 @@ export function createResidentTiles<Payload, Extra extends object = object>(
         if (disposed || controller.signal.aborted || !desired(item.key)) return;
         const tries = (attempts.get(item.key) ?? 0) + 1;
         attempts.set(item.key, tries);
-        // Failures stick for the session; raise the cap if a longer outage should recover.
+        // shortcut: failures stick for the session, raise MAX_ATTEMPTS or add a timer if a
+        // longer outage should recover.
         if (tries < MAX_ATTEMPTS) return;
         failed.add(item.key);
         const report = options.onError ?? console.warn;
@@ -197,7 +182,7 @@ export function createResidentTiles<Payload, Extra extends object = object>(
       const speculative = !wanted.has(item.key);
       if (speculative && [...pending.values()].some((p) => p.speculative)) continue;
       if (item.level > 0 && !speculative) {
-        const parent = tileKey(item.face, item.level - 1, item.x >> 1, item.y >> 1);
+        const parent = tileKey(item.root, item.level - 1, item.x >> 1, item.y >> 1);
         if (wanted.has(parent) && missing(parent)) continue;
       }
       start(item, speculative);
@@ -226,46 +211,56 @@ export function createResidentTiles<Payload, Extra extends object = object>(
     const origin = instances.origin;
     const ground =
       Math.hypot(origin[0], origin[1], origin[2]) > 0
-        ? facePoint(origin[0], origin[1], origin[2])
+        ? rootPoint(origin[0], origin[1], origin[2])
         : undefined;
     const centers = Array.from({ length: instances.count }, (_, i) => {
       const [u, v] = instanceCenter(instances, i);
-      return [instances.faces[i], u, v, Math.min(maxLevel, instanceLevel(instances, i))] as const;
+      const root = instances.roots[i];
+      return [
+        root,
+        u,
+        v,
+        Math.min(rootMaxLevel(root, maxLevel), instanceLevel(instances, i)),
+      ] as const;
     });
-    const add = (face: number, level: number, u: number, v: number, priority: number) => {
-      const tile = candidate(face, level, u, v, priority);
+    const add = (root: number, level: number, u: number, v: number, priority: number) => {
+      const tile = candidate(root, level, u, v, priority);
       if (!tile) return;
       const old = wanted.get(tile.key);
       if (old) old.priority += priority;
       else wanted.set(tile.key, tile);
     };
-    // Lower one uniform cap until every visible leaf is covered within the slots.
+    // Lower one uniform cap until every visible leaf is covered within the slots. It is a
+    // dataset level, so the same cap means the same resolution on every root.
     for (cap = maxLevel; ; cap--) {
       wanted = new Map();
-      for (let face = 0; face < 6; face++)
-        wanted.set(tileKey(face, 0, 0, 0), {
-          face,
+      for (let root = 0; root < ROOT_COUNT; root++)
+        wanted.set(tileKey(root, 0, 0, 0), {
+          root,
           level: 0,
           x: 0,
           y: 0,
-          key: tileKey(face, 0, 0, 0),
+          key: tileKey(root, 0, 0, 0),
           priority: ROOT_PRIORITY,
         });
       for (let level = 1; level <= cap && wanted.size <= limit; level++) {
         for (let i = 0; i < centers.length && wanted.size <= limit; i++) {
-          const [face, u, v, finest] = centers[i];
-          if (level <= finest) add(face, level, u, v, priorities[i]);
+          const [root, u, v, finest] = centers[i];
+          const own = rootLevel(root, level);
+          if (own > 0 && own <= finest) add(root, own, u, v, priorities[i]);
         }
-        if (options.coverGround && ground)
-          add(ground[0], level, ground[1], ground[2], GROUND_PRIORITY);
+        if (options.coverGround && ground) {
+          const own = rootLevel(ground[0], level);
+          if (own > 0) add(ground[0], own, ground[1], ground[2], GROUND_PRIORITY);
+        }
       }
       if (wanted.size <= limit || cap === 0) break;
     }
     // Spare slots, and slots taken from the least important refinements, keep the
     // ground under the camera and the most important instances at their own level.
     const uniform = new Set(wanted.keys());
-    const deepen = (face: number, level: number, u: number, v: number, priority: number) => {
-      const tile = candidate(face, level, u, v, priority);
+    const deepen = (root: number, level: number, u: number, v: number, priority: number) => {
+      const tile = candidate(root, level, u, v, priority);
       if (!tile) return true;
       const old = wanted.get(tile.key);
       if (old) {
@@ -281,7 +276,7 @@ export function createResidentTiles<Payload, Extra extends object = object>(
           let hasChild = false;
           for (let q = 0; q < 4 && !hasChild; q++)
             hasChild = wanted.has(
-              tileKey(other.face, other.level + 1, other.x * 2 + (q & 1), other.y * 2 + (q >> 1)),
+              tileKey(other.root, other.level + 1, other.x * 2 + (q & 1), other.y * 2 + (q >> 1)),
             );
           if (!hasChild) worst = other;
         }
@@ -292,13 +287,17 @@ export function createResidentTiles<Payload, Extra extends object = object>(
       return true;
     };
     if (ground)
-      for (let level = cap + 1; level <= maxLevel; level++)
+      for (
+        let level = Math.max(1, rootLevel(ground[0], cap + 1));
+        level <= rootMaxLevel(ground[0], maxLevel);
+        level++
+      )
         if (!deepen(ground[0], level, ground[1], ground[2], GROUND_PRIORITY)) break;
     const order = centers.map((_, i) => i).sort((a, b) => priorities[b] - priorities[a]);
     for (const i of order) {
-      const [face, u, v, finest] = centers[i];
-      for (let level = cap + 1; level <= finest; level++)
-        if (!deepen(face, level, u, v, priorities[i])) break;
+      const [root, u, v, finest] = centers[i];
+      for (let level = Math.max(1, rootLevel(root, cap + 1)); level <= finest; level++)
+        if (!deepen(root, level, u, v, priorities[i])) break;
     }
     for (const key of wanted.keys()) if (prefetch.has(key) && ready.has(key)) counts.prefetchHits++;
     prefetch = new Map();
@@ -312,11 +311,11 @@ export function createResidentTiles<Payload, Extra extends object = object>(
       planned = undefined;
     },
     /** Queue a speculative tile for idle bandwidth. Cleared by the next plan. */
-    prefetch(face: number, level: number, x: number, y: number, priority: number) {
-      if (!options.available(face, level, x, y)) return;
-      const key = tileKey(face, level, x, y);
+    prefetch(root: number, level: number, x: number, y: number, priority: number) {
+      if (!options.available(root, level, x, y)) return;
+      const key = tileKey(root, level, x, y);
       if (!wanted.has(key) && !prefetch.has(key))
-        prefetch.set(key, { face, level, x, y, key, priority });
+        prefetch.set(key, { root, level, x, y, key, priority });
     },
     /** Set the fade clock. `fadeMs` of zero reveals tiles immediately. */
     setClock(time: number, duration = fadeMs) {
@@ -328,14 +327,14 @@ export function createResidentTiles<Payload, Extra extends object = object>(
      * parent it is still fading in over. `activate` marks the tiles as drawn this
      * frame: it starts their fades and refreshes their LRU position.
      */
-    pair(face: number, level: number, u: number, v: number, activate = false): TilePair<Record> {
+    pair(root: number, level: number, u: number, v: number, activate = false): TilePair<Record> {
       let best: Record | undefined,
         parent: Record | undefined,
         blend = 1;
       for (let l = 0; l <= level; l++) {
-        const { x, y } = addressAt(face, l, u, v);
-        const record = ready.get(tileKey(face, l, x, y));
-        if (!record || !options.available(face, l, x, y)) continue;
+        const { x, y } = addressAt(root, l, u, v);
+        const record = ready.get(tileKey(root, l, x, y));
+        if (!record || !options.available(root, l, x, y)) continue;
         if (activate) record.used = frame;
         // Finish the parent fade before revealing its child.
         if (best && blend < 1) break;
@@ -346,16 +345,21 @@ export function createResidentTiles<Payload, Extra extends object = object>(
       }
       return { best, parent, blend };
     },
-    /** Start the six roots' fades even off screen. Returns whether any is still fading. */
+    /** Start the roots' fades even off screen. Returns whether any is still fading. */
     startRootFades() {
       let fading = false;
-      for (let face = 0; face < 6; face++) {
-        const root = ready.get(tileKey(face, 0, 0, 0));
-        if (!root) continue;
-        root.fadeStart ??= now;
-        fading ||= now - root.fadeStart < fadeMs;
+      for (let root = 0; root < ROOT_COUNT; root++) {
+        const tile = ready.get(tileKey(root, 0, 0, 0));
+        if (!tile) continue;
+        tile.fadeStart ??= now;
+        fading ||= now - tile.fadeStart < fadeMs;
       }
       return fading;
+    },
+    /** Every wanted tile is resident or has failed. Fades may still be running. */
+    settled() {
+      for (const key of wanted.keys()) if (missing(key)) return false;
+      return true;
     },
     /** Whether any resident tile is still fading in. */
     fading() {

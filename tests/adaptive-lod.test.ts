@@ -3,6 +3,7 @@ import test from "node:test";
 import { createTileBatch } from "../src/tiles/tile.ts";
 import { selectAdaptiveTiles } from "../src/tiles/quadtree.ts";
 import { VIEW, createSelectionView, projectedCellPixels } from "../src/tiles/lod.ts";
+import { rootPoint } from "../src/tiles/roots.ts";
 
 const radius = 1_737_400;
 function makeView(x = 0, y = 0, z = 3) {
@@ -19,20 +20,36 @@ function makeView(x = 0, y = 0, z = 3) {
 }
 
 function verifyCoverage(tiles, maxLevel) {
-  const area = new Float64Array(6);
   const ids = new Set();
   for (let i = 0; i < tiles.count; i++) {
-    const face = tiles.face[i],
+    const root = tiles.root[i],
       level = tiles.level[i],
       x = tiles.x[i],
       y = tiles.y[i];
-    assert.ok(face < 6 && level <= maxLevel && x < 2 ** level && y < 2 ** level);
-    const id = `${face}/${level}/${x}/${y}`;
+    assert.ok(root < 4 && level <= maxLevel && x < 2 ** level && y < 2 ** level);
+    const id = `${root}/${level}/${x}/${y}`;
     assert.equal(ids.has(id), false);
     ids.add(id);
-    area[face] += 1 / 4 ** level;
   }
-  assert.deepEqual([...area], [1, 1, 1, 1, 1, 1]);
+  // Every sampled direction is under a selected tile of the root that owns it.
+  for (const [dx, dy, dz] of [
+    [1, 0, 0.3],
+    [1, 0, -0.3],
+    [0.05, 1, 0],
+    [0.05, -1, 0],
+    [-1, 0.6, 0.2],
+  ]) {
+    const [root, u, v] = rootPoint(dx, dy, dz);
+    const hit = [...Array(tiles.count).keys()].some((i) => {
+      const n = 2 ** tiles.level[i];
+      return (
+        tiles.root[i] === root &&
+        Math.floor(u * n) === tiles.x[i] &&
+        Math.floor(v * n) === tiles.y[i]
+      );
+    });
+    assert.ok(hit, `${dx},${dy},${dz}`);
+  }
   // No selected node may have a selected ancestor.
   for (let i = 0; i < tiles.count; i++) {
     let level = tiles.level[i],
@@ -42,21 +59,21 @@ function verifyCoverage(tiles, maxLevel) {
       level--;
       x = Math.floor(x / 2);
       y = Math.floor(y / 2);
-      assert.equal(ids.has(`${tiles.face[i]}/${level}/${x}/${y}`), false);
+      assert.equal(ids.has(`${tiles.root[i]}/${level}/${x}/${y}`), false);
     }
   }
 }
 
-const averageLevel = (tiles, face) => {
-  // Weight by covered face area, not by number of leaves.
+const averageLevel = (tiles, root) => {
+  // Weight by covered root area, not by number of leaves.
   let result = 0;
   for (let i = 0; i < tiles.count; i++) {
-    if (tiles.face[i] === face) result += tiles.level[i] / 4 ** tiles.level[i];
+    if (tiles.root[i] === root) result += tiles.level[i] / 4 ** tiles.level[i];
   }
   return result;
 };
 
-test("adaptive leaves cover all faces without overlap at orbit and local views", () => {
+test("adaptive leaves cover all roots without overlap at orbit and local views", () => {
   const tiles = createTileBatch(384);
   for (const camera of [
     [0, 0, 10],
@@ -75,7 +92,7 @@ test("adaptive leaves cover all faces without overlap at orbit and local views",
     for (let i = 0; i < tiles.count; i++) {
       if (tiles.level[i] < 3) {
         assert.ok(
-          projectedCellPixels(tiles.face[i], tiles.level[i], tiles.x[i], tiles.y[i], view) <=
+          projectedCellPixels(tiles.root[i], tiles.level[i], tiles.x[i], tiles.y[i], view) <=
             view[VIEW.MaxCellPixels],
         );
       }
@@ -88,13 +105,13 @@ test("near regions refine more and detail follows orbiting at fixed altitude", (
   selectAdaptiveTiles(tiles, makeView(0, 0, 1.2));
   assert.ok(tiles.count < 384);
   assert.ok(new Set(tiles.level.slice(0, tiles.count)).size > 1);
-  assert.ok(averageLevel(tiles, 4) > averageLevel(tiles, 5));
-  const before = averageLevel(tiles, 4);
-  selectAdaptiveTiles(tiles, makeView(0, 0, -1.2));
-  assert.ok(averageLevel(tiles, 5) > averageLevel(tiles, 4));
-  assert.equal(averageLevel(tiles, 5), before);
-  selectAdaptiveTiles(tiles, makeView(1.2, 0, 0));
   assert.ok(averageLevel(tiles, 0) > averageLevel(tiles, 1));
+  const before = averageLevel(tiles, 0);
+  selectAdaptiveTiles(tiles, makeView(0, 0, -1.2));
+  assert.ok(averageLevel(tiles, 1) > averageLevel(tiles, 0));
+  assert.equal(averageLevel(tiles, 1), before);
+  selectAdaptiveTiles(tiles, makeView(0, 1.2, 0));
+  assert.ok(averageLevel(tiles, 2) > averageLevel(tiles, 3));
 });
 
 test("surface inspection reaches deep local levels within a fixed tile budget", () => {
@@ -116,7 +133,7 @@ test("surface inspection reaches deep local levels within a fixed tile budget", 
       if (capacity === 2048) assert.ok(Math.max(...tiles.level.slice(0, tiles.count)) >= 15);
     }
   }
-  const tooSmall = createTileBatch(5);
+  const tooSmall = createTileBatch(3);
   assert.throws(() => selectAdaptiveTiles(tooSmall, makeView()), RangeError);
   assert.equal(tooSmall.count, 0);
 });

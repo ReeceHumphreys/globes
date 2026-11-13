@@ -1,5 +1,9 @@
 import { validateTileStorage, type PMTilesStorage } from "../tiles/tile-source.ts";
+import { parseTileKey, rootMaxLevel, tileKey } from "../tiles/roots.ts";
 import type { ImageryManifest } from "./manifest.ts";
+
+/** The contract's deepest level for a site. */
+const MAX_SITE_LEVEL = 17;
 
 export interface RegionalSite {
   storage?: PMTilesStorage;
@@ -55,7 +59,7 @@ export function parseRegionalCatalog(value: unknown, base: ImageryManifest): Reg
       site.radiusMeters <= 0 ||
       !Number.isInteger(site.maxLevel) ||
       site.maxLevel <= base.maxLevel ||
-      site.maxLevel > 16 ||
+      site.maxLevel > MAX_SITE_LEVEL ||
       !Array.isArray(site.tiles) ||
       site.tiles.length > 20000 ||
       !site.source ||
@@ -69,15 +73,12 @@ export function parseRegionalCatalog(value: unknown, base: ImageryManifest): Reg
     ids.add(site.id);
     const own = new Set<string>();
     for (const key of site.tiles) {
-      if (typeof key !== "string" || !/^[0-5]\/\d+\/\d+\/\d+$/.test(key))
-        throw new Error("Invalid regional tile address.");
-      const [face, level, x, y] = key.split("/").map(Number);
+      const address = parseTileKey(key);
+      if (!address) throw new Error("Invalid regional tile address.");
+      const [root, level] = address;
       if (
-        level <= base.maxLevel ||
-        level > site.maxLevel ||
-        x >= 2 ** level ||
-        y >= 2 ** level ||
-        key !== `${face}/${level}/${x}/${y}` ||
+        level <= rootMaxLevel(root, base.maxLevel) ||
+        level > rootMaxLevel(root, site.maxLevel) ||
         addresses.has(key)
       )
         throw new Error("Invalid or overlapping regional tile address.");
@@ -86,8 +87,11 @@ export function parseRegionalCatalog(value: unknown, base: ImageryManifest): Reg
     }
     // A complete ancestor chain keeps progressive loading/fades intact.
     for (const key of own) {
-      const [face, level, x, y] = key.split("/").map(Number);
-      if (level > base.maxLevel + 1 && !own.has(`${face}/${level - 1}/${x >> 1}/${y >> 1}`))
+      const [root, level, x, y] = parseTileKey(key)!;
+      if (
+        level > rootMaxLevel(root, base.maxLevel) + 1 &&
+        !own.has(tileKey(root, level - 1, x >> 1, y >> 1))
+      )
         throw new Error("Regional tile is missing its parent.");
     }
   }

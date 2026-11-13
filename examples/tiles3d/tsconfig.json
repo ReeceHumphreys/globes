@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "tiled-globe": ["../../src/index.ts"]
+    }
+  },
+  "include": [".", "../../src"]
+}

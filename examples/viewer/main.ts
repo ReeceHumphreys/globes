@@ -7,6 +7,7 @@ import {
   Graticule,
   createBloom,
   EARTH_AIR,
+  GLOW_AIR,
   MARS_AIR,
   GlobeControls,
   GlobeLabel,
@@ -34,6 +35,8 @@ const renderer = new THREE.WebGPURenderer({ antialias: true, reversedDepthBuffer
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
 await renderer.init();
+// Model-view matrices in 64-bit on the CPU, so objects in a GlobeAnchor do not jitter.
+renderer.highPrecision = true;
 document.body.append(renderer.domElement);
 
 const labels = new CSS2DRenderer();
@@ -45,13 +48,14 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 1e9);
 void loadStarBackground().then((sky) => {
   scene.background = sky;
-  scene.backgroundIntensity = 0.04;
 });
 const sun = new THREE.DirectionalLight(0xffffff, 3);
 scene.add(sun, sun.target, new THREE.AmbientLight(0xffffff, 0.05));
 
 let shown: { globe: TiledGlobe; controls: GlobeControls; dispose(): void } | undefined;
 let latestShow = 0;
+// Earth as a drawn map: the two-tone land tileset, a faint grid and a white glow.
+let minimal = new URLSearchParams(location.search).get("style") === "minimal";
 
 async function show(id: BodyId) {
   const request = ++latestShow;
@@ -59,53 +63,86 @@ async function show(id: BodyId) {
   shown = undefined;
   panel.setNotice("");
   const body = BODIES[id];
+  const plain = minimal && id === "earth";
   const waterMask =
-    id === "earth" ? await loadOceanMask(waterMaskURL, new AbortController().signal) : undefined;
+    id === "earth" && !plain
+      ? await loadOceanMask(waterMaskURL, new AbortController().signal)
+      : undefined;
   if (request !== latestShow) return waterMask?.dispose();
 
   // Earth's imagery is a bright, saturated photo: AgX and the Moon's exposure wash it out.
   renderer.toneMapping = id === "earth" ? THREE.NeutralToneMapping : THREE.AgXToneMapping;
-  renderer.toneMappingExposure = 2 ** body.exposureStops;
+  renderer.toneMappingExposure = 2 ** (plain ? 0 : body.exposureStops);
+  scene.backgroundIntensity = plain ? 0 : 0.04;
   const { longitudeDeg, latitudeDeg } = subsolarPoint(body.name, Date.now());
-  geographicToDirection(latitudeDeg, longitudeDeg, sun.position);
+  // A drawn map is staged, so its sun skims the land rather than following the clock.
+  if (plain) geographicToDirection(20, -15, sun.position);
+  else geographicToDirection(latitudeDeg, longitudeDeg, sun.position);
 
-  const globe = new TiledGlobe({
+  const shape = {
     name: body.name,
     radius: body.radiusMeters,
     flattening: "flattening" in body ? body.flattening : 0,
     sun,
-    overview: body.overview,
-    imagery: dataset(body.imagery),
-    elevation: dataset(body.elevation),
-    regions: "regions" in body ? dataset(body.regions) : undefined,
-    // App-owned files, so they never go through the tile host.
-    nightLights: "nightLights" in body ? new URL(body.nightLights, base).href : undefined,
-    waterMask,
-    hapke: id === "moon",
-    surfaceDetail: id === "moon",
-  });
+  };
+  const globe = new TiledGlobe(
+    plain
+      ? { ...shape, imagery: dataset(BODIES.earth.map), ambient: 0.04 }
+      : {
+          ...shape,
+          overview: body.overview,
+          imagery: dataset(body.imagery),
+          elevation: dataset(body.elevation),
+          regions: "regions" in body ? dataset(body.regions) : undefined,
+          // App-owned files, so they never go through the tile host.
+          nightLights: "nightLights" in body ? new URL(body.nightLights, base).href : undefined,
+          waterMask,
+          hapke: id === "moon",
+          surfaceDetail: id === "moon",
+        },
+  );
   globe.addEventListener("error", ({ error }) => console.warn(`[${body.name}]`, error));
   scene.add(globe);
   camera.position.set(body.radiusMeters * 3, 0, 0);
+  if (plain) geographicToDirection(5, -100, camera.position).multiplyScalar(body.radiusMeters * 3);
   const controls = new GlobeControls(camera, renderer.domElement, globe);
 
-  const grid = new Graticule();
-  grid.visible = false;
+  const owned: { dispose(): void }[] = [];
+  if (plain) {
+    const glow = new Atmosphere(GLOW_AIR);
+    globe.add(glow);
+    owned.push(glow);
+  }
+  const grid = new Graticule(plain ? { spacing: 30, opacity: 0.05 } : undefined);
+  grid.visible = plain;
   globe.add(grid);
   const toggles = [{ name: "Lat/long grid", object: grid as { visible: boolean } }];
-  const owned: { dispose(): void }[] = [];
+  if (id === "earth")
+    toggles.push({
+      name: "Minimal",
+      object: {
+        get visible() {
+          return minimal;
+        },
+        // The two looks are different globes, so switching rebuilds it.
+        set visible(on) {
+          minimal = on;
+          void show(id);
+        },
+      },
+    });
   const air = id === "earth" ? EARTH_AIR : id === "mars" ? MARS_AIR : undefined;
-  if (air) {
+  if (air && !plain) {
     const atmosphere = new Atmosphere(air);
     globe.add(atmosphere);
     owned.push(atmosphere);
   }
-  if ("coastline" in body) {
+  if ("coastline" in body && !plain) {
     const coastline = new GeoJsonOverlay({ data: body.coastline, color: "#ffd54a" });
     globe.add(coastline);
     toggles.push({ name: "USA coastline", object: coastline });
   }
-  if ("clouds" in body) {
+  if ("clouds" in body && !plain) {
     const clouds = new Clouds({ map: new URL(body.clouds, base).href });
     globe.add(clouds);
     owned.push(clouds);
@@ -129,13 +166,19 @@ async function show(id: BodyId) {
       globe.dispose();
     },
   };
-  panel.show(id, toggles);
+  panel.show(id, toggles, plain ? "Land and sea: Natural Earth" : undefined);
   void globe.ready.then(() => {
     if (shown?.globe === globe && !globe.stats.imageryAvailable)
-      panel.setNotice("Showing the bundled overview. Start tile-service for tiled imagery.");
+      panel.setNotice(
+        plain
+          ? "Start tile-service for the map."
+          : "Showing the bundled overview. Start tile-service for tiled imagery.",
+      );
   });
   const url = new URL(location.href);
   url.searchParams.set("body", id);
+  if (minimal) url.searchParams.set("style", "minimal");
+  else url.searchParams.delete("style");
   history.replaceState(null, "", url);
 }
 

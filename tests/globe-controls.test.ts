@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Object3D, PerspectiveCamera, Scene, Vector3 } from "three/webgpu";
+import { Object3D, PerspectiveCamera, Raycaster, Scene, Vector3 } from "three/webgpu";
 import { geographicToDirection } from "../src/geographic.ts";
 import { GlobeControls } from "../src/globe-controls.ts";
 
@@ -13,6 +13,8 @@ class Canvas extends EventTarget {
   hasPointerCapture() {
     return false;
   }
+  setPointerCapture() {}
+  releasePointerCapture() {}
 }
 const radius = 1737400;
 // The controls need only a globe's radius and displayed height; a stand-in Object3D works.
@@ -68,6 +70,38 @@ test("goTo and altitude move the camera and announce a change", () => {
   assert.equal(changes, 2);
   assert.throws(() => (controls.altitude = 1), RangeError);
   assert.throws(() => controls.goTo(91, 0), RangeError);
+  controls.dispose();
+});
+
+test("a drag grabs the surface in the globe frame, not the height under the camera", () => {
+  const scene = new Scene();
+  const body = globe(() => 4000);
+  body.position.set(0, 1e9, 0);
+  scene.add(body);
+  const center = new Vector3(radius, 0, 0);
+  const side = new Vector3(0, 0, radius);
+  body.raycast = (
+    raycaster: Raycaster,
+    intersects: { distance: number; point: Vector3; object: Object3D }[],
+  ) => {
+    assert.equal(raycaster.far, Infinity);
+    const toward = body.getWorldPosition(new Vector3()).sub(raycaster.ray.origin).normalize();
+    const local = raycaster.ray.direction.dot(toward) > 0.999 ? center : side;
+    const point = body.localToWorld(local.clone());
+    intersects.push({ distance: raycaster.ray.origin.distanceTo(point), point, object: body });
+  };
+  const camera = new PerspectiveCamera(60, 1.5, 10, 2000);
+  camera.position.set(radius + 7000, 1e9, 0);
+  const controls = new GlobeControls(camera, new Canvas() as unknown as HTMLElement, body as Globe);
+  const pointer = (type: string, x: number, y: number) =>
+    Object.assign(new Event(type), { button: 0, clientX: x, clientY: y, pointerId: 1 });
+  controls.domElement.dispatchEvent(pointer("pointerdown", 600, 400));
+  controls.domElement.dispatchEvent(pointer("pointermove", 760, 400));
+  // Center hit is local +X and the offset hit is local +Z, so the grab turns +X onto +Z.
+  assert.ok(
+    camera.position.distanceTo(new Vector3(0, 0, -(radius + 7000))) < 1,
+    camera.position.toArray().join(","),
+  );
   controls.dispose();
 });
 

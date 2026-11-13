@@ -1,11 +1,11 @@
 import type { SelectionView } from "./lod.ts";
 
-// Columns are face, level, x, y. Each is capacity uint32s.
+// Columns are root, level, x, y. Each is capacity uint32s.
 export interface TileBatch {
   readonly buffer: ArrayBuffer;
   readonly capacity: number;
   count: number;
-  readonly face: Uint32Array;
+  readonly root: Uint32Array;
   readonly level: Uint32Array;
   readonly x: Uint32Array;
   readonly y: Uint32Array;
@@ -18,7 +18,7 @@ export function assertTileBatch(batch: TileBatch): void {
     !Number.isInteger(batch.count) ||
     batch.count < 0 ||
     batch.count > batch.capacity ||
-    batch.face.length !== batch.capacity ||
+    batch.root.length !== batch.capacity ||
     batch.level.length !== batch.capacity ||
     batch.x.length !== batch.capacity ||
     batch.y.length !== batch.capacity
@@ -37,7 +37,7 @@ export function createTileBatch(capacity: number): TileBatch {
     buffer,
     capacity,
     count: 0,
-    face: new Uint32Array(buffer, 0, capacity),
+    root: new Uint32Array(buffer, 0, capacity),
     level: new Uint32Array(buffer, stride, capacity),
     x: new Uint32Array(buffer, 2 * stride, capacity),
     y: new Uint32Array(buffer, 3 * stride, capacity),

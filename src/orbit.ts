@@ -1,18 +1,6 @@
-import {
-  MathUtils,
-  Matrix4,
-  Quaternion,
-  Raycaster,
-  Vector2,
-  Vector3,
-  type PerspectiveCamera,
-} from "three/webgpu";
-import { ellipsoidDistance } from "./ellipsoid.ts";
+import { MathUtils, Matrix4, Quaternion, Vector3, type PerspectiveCamera } from "three/webgpu";
 
-const _raycaster = new Raycaster();
-const _pointer = new Vector2();
 const _anchorTurn = new Quaternion();
-const _inverseParent = new Matrix4();
 const _look = new Matrix4();
 
 /**
@@ -24,46 +12,6 @@ export function lookAtLocal(camera: PerspectiveCamera, target: Vector3): void {
   camera.quaternion.setFromRotationMatrix(_look);
 }
 const _origin = new Vector3();
-
-/** Nearest visible surface intersection, in the camera's parent frame; no terrain raycasting. */
-export function pickGlobe(
-  camera: PerspectiveCamera,
-  x: number,
-  y: number,
-  radius: number,
-  target: Vector3,
-  flattening = 0,
-): boolean {
-  camera.updateMatrixWorld(true);
-  _pointer.set(x, y);
-  _raycaster.setFromCamera(_pointer, camera);
-  if (camera.parent) {
-    _raycaster.ray.applyMatrix4(_inverseParent.copy(camera.parent.matrixWorld).invert());
-    _raycaster.ray.direction.normalize();
-  }
-  const distance = ellipsoidDistance(_raycaster.ray, radius, flattening, sphereDistance);
-  if (distance === undefined) return false;
-  target
-    .copy(_raycaster.ray.origin)
-    .addScaledVector(_raycaster.ray.direction, distance)
-    .normalize();
-  return true;
-}
-
-/** Distance along a unit-direction ray to a sphere at the origin, if it hits. */
-export function sphereDistance(
-  { origin, direction }: { origin: Vector3; direction: Vector3 },
-  radius: number,
-): number | undefined {
-  const b = origin.dot(direction);
-  // This form avoids subtracting two planet-sized squared lengths near the surface.
-  const c = (origin.length() - radius) * (origin.length() + radius);
-  const discriminant = b * b - c;
-  if (discriminant < 0) return undefined;
-  const root = Math.sqrt(discriminant);
-  const distance = b < 0 ? c / (-b + root) : -b - root;
-  return distance < 0 ? undefined : distance;
-}
 
 /** Rotate the camera so the newly picked ground moves beneath the original anchor. */
 export function anchorOrbit(camera: PerspectiveCamera, current: Vector3, anchor: Vector3): void {

@@ -25,10 +25,10 @@ export function createPanel(body: BodyId, onBody: (id: BodyId) => void) {
 
   return {
     /** Show a body's toggles. Each one flips an object's `visible`. */
-    show(id: BodyId, toggles: { name: string; object: { visible: boolean } }[]) {
+    show(id: BodyId, toggles: { name: string; object: { visible: boolean } }[], sources?: string) {
       select(id);
       const shown = BODIES[id];
-      credit.textContent = "credit" in shown ? shown.credit : "";
+      credit.textContent = sources ?? ("credit" in shown ? shown.credit : "");
       layers.replaceChildren(
         ...toggles.map(({ name, object }) => {
           const button = document.createElement("button");

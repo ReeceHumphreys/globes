@@ -2,8 +2,7 @@ node_modules
 dist
 /docs
 examples/viewer/public
-/data
-/.toolchains
-/native
 package-lock.json
 *.geojson
+*.pmtiles
+tests/contract

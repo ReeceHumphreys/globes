@@ -1,4 +1,12 @@
+import type { Object3D } from "three/webgpu";
 import { CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+
+/** A CSS2D label removes its element only when it is removed itself. Walk a detached ancestor too. */
+export function removeLabelElements(root: Object3D): void {
+  root.traverse((object) => {
+    if ("isCSS2DObject" in object) (object as unknown as { element: Element }).element.remove();
+  });
+}
 
 /**
  * An HTML label pinned to a geographic position on a TiledGlobe.

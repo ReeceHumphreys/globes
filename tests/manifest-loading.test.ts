@@ -22,7 +22,7 @@ test("missing imagery handles HTTP 404 and Vite's successful HTML fallback", asy
 test("invalid data and server failures remain errors rather than silently missing datasets", async (t) => {
   for (const [response, pattern] of [
     [new Response("{broken"), /Invalid JSON.*manifest/],
-    [Response.json({ version: 99 }), /Unsupported globe imagery/],
+    [Response.json({ version: 99 }), /Unsupported imagery/],
     [new Response("server failed", { status: 500 }), /HTTP 500/],
   ] as const) {
     t.mock.method(globalThis, "fetch", async () => response);

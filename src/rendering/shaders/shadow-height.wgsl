@@ -1,14 +1,13 @@
-// Address the same resident height array as terrain, across all six cube faces.
+// Address the same resident height array as terrain, across all four roots.
 // Unloaded finer regions fall back to resident parents, never clamped tile edges.
 // The index walk only records which node it keeps. The height array, the large
 // fetch, is read afterwards for that node and for its parent while the node fades in.
-fn shadowHeight(heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, direction: vec3<f32>, coreSize: f32, gutter: f32, maxLevel: f32) -> f32 {
-  let onFace = facePoint(direction);
-  let face = i32(onFace.x);
-  let uv = clamp(onFace.yz, vec2<f32>(0.0), vec2<f32>(0.99999994));
+fn shadowHeight(heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, direction: vec3<f32>, coreSize: f32, gutter: f32, maxLevel: f32, encoding: vec2<f32>) -> f32 {
+  let onRoot = rootPoint(direction);
+  let uv = clamp(onRoot.yz, vec2<f32>(0.0), vec2<f32>(0.99999994));
   let dims=textureDimensions(indexMap);
   let imageSize=f32(textureDimensions(heightTiles).x);
-  var node=face;
+  var node=i32(onRoot.x);
   var local=uv;
   var slot=0.0;
   var parentSlot=0.0;
@@ -17,9 +16,8 @@ fn shadowHeight(heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, d
   var fade=1.0;
   var kept=false;
   var keptParent=false;
-  // Supported source depth is at most 20. The lookup is bounded independently
-  // of terrain mesh subdivision and uses nearest textureLoad metadata reads.
-  for(var level=0;level<=20;level++) {
+  // Bounded independently of terrain mesh subdivision, using nearest textureLoad reads.
+  for(var level=0;level<=MAX_LEVEL;level++) {
     let pixel=u32(node)*2u;
     let children=textureLoad(indexMap,vec2<i32>(i32(pixel%dims.x),i32(pixel/dims.x)),0);
     let value=textureLoad(indexMap,vec2<i32>(i32((pixel+1u)%dims.x),i32((pixel+1u)/dims.x)),0);
@@ -39,9 +37,9 @@ fn shadowHeight(heightTiles: texture_2d_array<f32>, indexMap: texture_2d<f32>, d
     local=local*2.0-vec2<f32>(quadrant);
   }
   if(!kept) { return 0.0; }
-  let fine=sampleHeightLayer(heightTiles,slotUV,slot);
+  let fine=sampleHeightLayer(heightTiles,slotUV,slot,encoding);
   if(fade>=1.0) { return fine; }
   // A first resident node with no coarser parent fades in from the zero-meter sphere.
   if(!keptParent) { return fine*fade; }
-  return mix(sampleHeightLayer(heightTiles,parentUV,parentSlot),fine,fade);
+  return mix(sampleHeightLayer(heightTiles,parentUV,parentSlot,encoding),fine,fade);
 }

@@ -1,5 +1,4 @@
 import { createTileBatch, type AdaptiveTileSelector, type TileBatch } from "./tiles/tile.ts";
-import { selectAdaptiveTiles } from "./tiles/quadtree.ts";
 import { VIEW, type SelectionView } from "./tiles/lod.ts";
 import {
   createTileInstances,
@@ -11,10 +10,7 @@ import {
 // tiles, radius, or camera origin change.
 export type TileProducer = (view: SelectionView) => TileInstances;
 
-export function createTileProducer(
-  capacity: number,
-  select: AdaptiveTileSelector = selectAdaptiveTiles,
-): TileProducer {
+export function createTileProducer(capacity: number, select: AdaptiveTileSelector): TileProducer {
   let previous = createTileBatch(capacity);
   let scratch = createTileBatch(capacity);
   const instances = createTileInstances(capacity);
@@ -24,7 +20,7 @@ export function createTileProducer(
     if (a.count !== b.count) return false;
     for (let i = 0; i < a.count; i++) {
       if (
-        a.face[i] !== b.face[i] ||
+        a.root[i] !== b.root[i] ||
         a.level[i] !== b.level[i] ||
         a.x[i] !== b.x[i] ||
         a.y[i] !== b.y[i]

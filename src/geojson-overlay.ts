@@ -13,7 +13,7 @@ import {
 } from "three/tsl";
 import { LineSegments2 } from "three/addons/lines/webgpu/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
-import { GlobeLabel } from "./globe-label.ts";
+import { GlobeLabel, removeLabelElements } from "./globe-label.ts";
 import { fillPaths, readGeoJson, surfaceSegments, type GeoShapes } from "./geojson.ts";
 import { ImageOverlay, SurfaceOverlay, type OverlayView } from "./overlay.ts";
 
@@ -178,6 +178,7 @@ export class GeoJsonOverlay extends SurfaceOverlay {
 
   override dispose(): void {
     this.#disposed = true;
+    removeLabelElements(this);
     this.#lines?.geometry.dispose();
     (this.#lines?.material as THREE.Material | undefined)?.dispose();
     this.#fill?.image.dispose();

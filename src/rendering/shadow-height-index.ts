@@ -1,8 +1,9 @@
 import { DataTexture, FloatType, RGBAFormat, NearestFilter, NoColorSpace } from "three/webgpu";
 import { fadeWeight } from "../tiles/resident-tiles.ts";
+import { ROOT_COUNT } from "../tiles/roots.ts";
 
 export type ShadowHeightRecord = {
-  face: number;
+  root: number;
   level: number;
   x: number;
   y: number;
@@ -10,9 +11,9 @@ export type ShadowHeightRecord = {
   fadeStart?: number;
 };
 // Sparse quadtree: one RGBA texel of children, one of (slot, fade, 0, 0).
-// Six roots stay addressable even while some source tiles are still loading.
+// The roots stay addressable even while some source tiles are still loading.
 export function createShadowHeightIndex(residentLimit: number, maxLevel: number) {
-  const capacity = 6 + residentLimit * (maxLevel + 1);
+  const capacity = ROOT_COUNT + residentLimit * (maxLevel + 1);
   const width = 256,
     height = Math.ceil((capacity * 2) / width);
   const data = new Float32Array(width * height * 4);
@@ -23,13 +24,13 @@ export function createShadowHeightIndex(residentLimit: number, maxLevel: number)
   texture.generateMipmaps = false;
   const previous = new Float32Array(data.length).fill(NaN);
   let revision = 0;
-  let nodes = 6;
+  let nodes = ROOT_COUNT;
   function write(records: Iterable<ShadowHeightRecord>, now: number, fadeMs: number) {
     data.fill(0);
     for (let i = 0; i < capacity; i++) data.fill(-1, i * 8, i * 8 + 4);
-    nodes = 6;
+    nodes = ROOT_COUNT;
     for (const record of records) {
-      let node = record.face;
+      let node = record.root;
       for (let level = 1; level <= record.level; level++) {
         const shift = record.level - level,
           quadrant = ((record.x >> shift) & 1) + 2 * ((record.y >> shift) & 1),

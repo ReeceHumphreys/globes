@@ -1,12 +1,12 @@
-import { worldToFace } from "./roots.ts";
+import { rootDirection } from "./roots.ts";
 
 const elevations = new Float64Array(2);
 const patch = new Float64Array(3);
-const cameraOnFace = new Float64Array(3);
+const edge = new Float64Array(3);
 
 /** Conservative min/max terrain height, in meters, over one quadtree tile. */
 export interface HeightRanges {
-  rangeForTile(face: number, level: number, x: number, y: number, out: Float64Array): void;
+  rangeForTile(root: number, level: number, x: number, y: number, out: Float64Array): void;
 }
 
 // 35 float64 values. ProjectionScale = viewportHeight / (2 * tan(verticalFov / 2)).
@@ -31,23 +31,25 @@ export function createSelectionView(): SelectionView {
   return new Float64Array(VIEW_LENGTH);
 }
 
-// Face-local unit center, and the chord to the farthest corner. Differences of
+// Unit center, and the chord to the farthest point of the tile's edge. Differences of
 // the unit vectors stay accurate when a deep tile's corners nearly coincide.
-export function measurePatch(level: number, x: number, y: number, out: Float64Array): number {
+export function measurePatch(
+  root: number,
+  level: number,
+  x: number,
+  y: number,
+  out: Float64Array,
+): number {
   const n = 2 ** level;
-  const u = (x + 0.5) / n - 0.5;
-  const v = (y + 0.5) / n - 0.5;
-  const inv = 1 / Math.hypot(u, v, 0.5);
-  const a = (out[0] = u * inv);
-  const b = (out[1] = v * inv);
-  const c = (out[2] = 0.5 * inv);
+  rootDirection(root, (x + 0.5) / n, (y + 0.5) / n, out);
   let chord = 0;
-  for (let q = 0; q < 4; q++) {
-    const cu = (x + (q & 1)) / n - 0.5,
-      cv = (y + (q >> 1)) / n - 0.5;
-    const cl = Math.hypot(cu, cv, 0.5);
-    chord = Math.max(chord, Math.hypot(cu / cl - a, cv / cl - b, 0.5 / cl - c));
-  }
+  // Corners and edge midpoints: a tile reaching a pole is widest along its edges.
+  for (let j = 0; j <= 2; j++)
+    for (let i = 0; i <= 2; i++) {
+      if (i === 1 && j === 1) continue;
+      rootDirection(root, (x + i / 2) / n, (y + j / 2) / n, edge);
+      chord = Math.max(chord, Math.hypot(edge[0] - out[0], edge[1] - out[1], edge[2] - out[2]));
+    }
   return chord;
 }
 
@@ -55,7 +57,7 @@ export function measurePatch(level: number, x: number, y: number, out: Float64Ar
 // A spherical patch bound uses its center and four projected corners. Distance
 // to its near edge concentrates refinement near the camera without culling.
 export function projectedCellPixels(
-  face: number,
+  root: number,
   level: number,
   x: number,
   y: number,
@@ -63,21 +65,19 @@ export function projectedCellPixels(
   heights?: HeightRanges,
 ): number {
   const radius = view[VIEW.Radius];
-  const chord = measurePatch(level, x, y, patch);
-  // Sphere distances are unchanged by the face rotation, so compare in the patch frame.
-  worldToFace(face, view[VIEW.CameraX], view[VIEW.CameraY], view[VIEW.CameraZ], cameraOnFace);
+  const chord = measurePatch(root, level, x, y, patch);
   let low = view[VIEW.MinElevation],
     high = view[VIEW.MaxElevation];
   if (heights) {
-    heights.rangeForTile(face, level, x, y, elevations);
+    heights.rangeForTile(root, level, x, y, elevations);
     low = elevations[0];
     high = elevations[1];
   }
   const centerRadius = radius + (low + high) / 2;
   const centerDistance = Math.hypot(
-    cameraOnFace[0] - patch[0] * centerRadius,
-    cameraOnFace[1] - patch[1] * centerRadius,
-    cameraOnFace[2] - patch[2] * centerRadius,
+    view[VIEW.CameraX] - patch[0] * centerRadius,
+    view[VIEW.CameraY] - patch[1] * centerRadius,
+    view[VIEW.CameraZ] - patch[2] * centerRadius,
   );
   const patchRadius = (radius + high) * chord + (high - low) / 2;
   const nearDistance = Math.max(centerDistance - patchRadius, radius * 1e-6);

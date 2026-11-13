@@ -2,13 +2,12 @@ import type { TilePair } from "../tiles/resident-tiles.ts";
 import type { TileInstances } from "./tile-instances.ts";
 
 // Each drawn tile's row in the instance buffer. Imagery and heights both begin with a
-// tile pair; heights add the face and height range; one packed cache flag ends the row.
+// tile pair; heights add the height range; one packed cache flag ends the row.
 export const PAIR = { layers: 0, best: 2, parent: 6, blend: 10 } as const;
 const PAIR_FLOATS = 11;
 export const IMAGERY_STRIDE = PAIR_FLOATS;
-export const HEIGHT_FACE = PAIR_FLOATS;
 /** Also the length of what a baked sunlight patch depends on: the row before the range. */
-export const HEIGHT_RANGE = PAIR_FLOATS + 1;
+export const HEIGHT_RANGE = PAIR_FLOATS;
 export const HEIGHT_STRIDE = HEIGHT_RANGE + 1;
 export const ROW_HEIGHT = IMAGERY_STRIDE;
 export const ROW_FLAGS = IMAGERY_STRIDE + HEIGHT_STRIDE;
@@ -42,12 +41,13 @@ function writeUV(
     return;
   }
   const n = 2 ** tile.level,
-    j = i * 4,
-    v = instances.faceUVs[j + 1] * n - tile.y;
-  data[at] = offset + (instances.faceUVs[j] * n - tile.x) * scale;
+    j = i * 3,
+    width = instances.rootUVs[j + 2] * n * scale,
+    v = instances.rootUVs[j + 1] * n - tile.y;
+  data[at] = offset + (instances.rootUVs[j] * n - tile.x) * scale;
   data[at + 1] = offset + (flipV ? 1 - v : v) * scale;
-  data[at + 2] = instances.faceUVs[j + 2] * n * scale;
-  data[at + 3] = instances.faceUVs[j + 3] * n * scale * (flipV ? -1 : 1);
+  data[at + 2] = width;
+  data[at + 3] = flipV ? -width : width;
 }
 
 /** Write instance i's tile pair at `at`: slots, where each sits in its layer, and the blend. */

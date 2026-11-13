@@ -1,21 +1,20 @@
 import { measurePatch, VIEW, type HeightRanges, type SelectionView } from "./lod.ts";
-import { faceToWorld } from "./roots.ts";
+import { tileInUse } from "./roots.ts";
 
 const elevations = new Float64Array(2);
-const local = new Float64Array(3);
 const direction = new Float64Array(3);
 export function tileVisible(
-  face: number,
+  root: number,
   level: number,
   x: number,
   y: number,
   view: SelectionView,
   heights?: HeightRanges,
 ): boolean {
+  if (!tileInUse(root, level, x, y)) return false;
   if (!view[VIEW.Cull]) return true;
   const n = 2 ** level;
-  const chord = measurePatch(level, x, y, local);
-  faceToWorld(face, local[0], local[1], local[2], direction);
+  const chord = measurePatch(root, level, x, y, direction);
   const r = view[VIEW.Radius];
   const cx = view[0],
     cy = view[1],
@@ -24,7 +23,7 @@ export function tileVisible(
   let low = view[VIEW.MinElevation],
     high = view[VIEW.MaxElevation];
   if (heights) {
-    heights.rangeForTile(face, level, x, y, elevations);
+    heights.rangeForTile(root, level, x, y, elevations);
     low = elevations[0];
     high = elevations[1];
   }
@@ -47,7 +46,7 @@ export function tileVisible(
     bz = direction[2] * centerRadius - cz;
   // Planes are camera-relative, computed in double precision on the CPU.
   // Include the inward skirts in frustum bounds.
-  const skirt = Math.max(0.02, (4 * (r / n) ** 2) / (r * view[VIEW.Segments] ** 2));
+  const skirt = Math.max(0.02, (4 * ((Math.PI * r) / n) ** 2) / (r * view[VIEW.Segments] ** 2));
   const sphereRadius = chord * (r + high) + (high - low) / 2 + skirt;
   for (let p = VIEW.Planes; p < VIEW.Planes + 24; p += 4) {
     if (view[p] * bx + view[p + 1] * by + view[p + 2] * bz + view[p + 3] < -sphereRadius)

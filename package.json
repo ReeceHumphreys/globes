@@ -18,11 +18,12 @@
   "scripts": {
     "build": "vite build && tsc -p tsconfig.lib.json",
     "test": "node --test tests/*.test.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p examples/viewer",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p examples/viewer && tsc --noEmit -p examples/tiles3d",
     "format": "prettier --write .",
     "docs": "npx -y -p typescript@6.0 -p typedoc@0.28.20 typedoc",
     "prepack": "npm run build",
     "dev": "vite examples/viewer",
+    "dev:tiles3d": "vite examples/tiles3d",
     "build:example": "vite build examples/viewer",
     "preview": "vite preview examples/viewer",
     "data:ocean-mask": "node examples/viewer/scripts/ocean-mask.ts",
@@ -37,6 +38,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/three": "^0.186.0",
+    "3d-tiles-renderer": "0.5.3",
     "prettier": "^3.9.10",
     "three": "^0.186.1",
     "typescript": "^7.0.2",
